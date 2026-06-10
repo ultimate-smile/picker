@@ -166,6 +166,115 @@ class TestDiagnostics(unittest.TestCase):
         self.assertIn("直连", out)
 
 
+# 用于「指定股票资金流向」测试的样本（代码、市场、名称）
+SAMPLE_STOCKS = [
+    ("600519", "sh", "贵州茅台"),
+    ("000001", "sz", "平安银行"),
+    ("300750", "sz", "宁德时代"),
+    ("688981", "sh", "中芯国际"),
+]
+
+
+def _find_main_inflow_col(df: pd.DataFrame):
+    """在个股资金流向 DataFrame 中找到“主力净流入”相关列"""
+    for col in df.columns:
+        if "主力" in str(col) and "净流入" in str(col):
+            return col
+    return None
+
+
+class TestSpecificStocksFundFlowOffline(unittest.TestCase):
+    """离线：用 mock 验证“按指定股票取资金流向”的封装逻辑（始终运行）"""
+
+    def _fake_flow_df(self):
+        return pd.DataFrame({
+            "日期": ["2026-06-04", "2026-06-05", "2026-06-06",
+                     "2026-06-09", "2026-06-10", "2026-06-11"],
+            "主力净流入-净额": [1e7, -2e6, 3e7, 5e6, -1e6, 8e6],
+            "收盘价": [1700, 1710, 1725, 1730, 1728, 1740],
+        })
+
+    def test_fetch_hist_flow_picks_correct_market(self):
+        """600 开头 → sh，其它 → sz；并验证按指定股票调用 akshare"""
+        captured = []
+
+        def fake(stock, market):
+            captured.append((stock, market))
+            return self._fake_flow_df()
+
+        with mock.patch.object(sp.ak, "stock_individual_fund_flow", side_effect=fake), \
+             mock.patch.object(sp, "DATA_FETCH_RETRY_DELAY", 0):
+            for code, expected_market, _name in SAMPLE_STOCKS:
+                sp.fetch_hist_flow(code, days=5)
+
+        self.assertEqual(captured, [
+            ("600519", "sh"), ("000001", "sz"),
+            ("300750", "sz"), ("688981", "sh"),
+        ])
+
+    def test_fetch_hist_flow_returns_last_n_days(self):
+        with mock.patch.object(sp.ak, "stock_individual_fund_flow",
+                               return_value=self._fake_flow_df()), \
+             mock.patch.object(sp, "DATA_FETCH_RETRY_DELAY", 0):
+            df = sp.fetch_hist_flow("600519", days=3)
+        self.assertEqual(len(df), 3)
+        self.assertEqual(df["日期"].tolist(), ["2026-06-09", "2026-06-10", "2026-06-11"])
+
+    def test_fetch_hist_flow_empty_on_failure(self):
+        with mock.patch.object(sp.ak, "stock_individual_fund_flow",
+                               side_effect=RuntimeError("net")), \
+             mock.patch.object(sp, "DATA_FETCH_RETRIES", 2), \
+             mock.patch.object(sp, "DATA_FETCH_RETRY_DELAY", 0):
+            df = sp.fetch_hist_flow("600519")
+        self.assertTrue(df.empty)
+
+
+class TestSpecificStocksFundFlowLive(unittest.TestCase):
+    """
+    联网：通过 AKShare 真正拉取指定几支股票的资金流向数据并校验。
+
+    需设置 RUN_LIVE_TESTS=1 才运行；若当前网络/代理无法访问东方财富，
+    测试会 skip（而非误报失败）。
+        RUN_LIVE_TESTS=1 python3 -m unittest -v test_stock_picker.TestSpecificStocksFundFlowLive
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if os.environ.get("RUN_LIVE_TESTS") != "1":
+            raise unittest.SkipTest("设置 RUN_LIVE_TESTS=1 才运行联网测试")
+        sp.configure_network()
+
+    def _fetch(self, code, market):
+        return sp.fetch_with_retry(
+            f"{code} 资金流向",
+            sp.ak.stock_individual_fund_flow,
+            stock=code, market=market,
+        )
+
+    def test_fetch_fund_flow_for_specific_stocks(self):
+        results = {}
+        for code, market, name in SAMPLE_STOCKS:
+            try:
+                df = self._fetch(code, market)
+            except Exception as e:
+                self.skipTest(f"网络/代理无法访问东方财富（{code} {name}）：{e}")
+
+            with self.subTest(stock=f"{code} {name}"):
+                self.assertIsInstance(df, pd.DataFrame)
+                self.assertFalse(df.empty, f"{code} {name} 返回空数据")
+                col = _find_main_inflow_col(df)
+                self.assertIsNotNone(col, f"{code} {name} 缺少“主力净流入”列：{list(df.columns)}")
+                # 数值列应可解析为数字
+                vals = pd.to_numeric(
+                    df[col].astype(str).str.replace(",", ""), errors="coerce"
+                ).dropna()
+                self.assertGreater(len(vals), 0, f"{code} {name} 主力净流入无有效数值")
+                results[code] = len(df)
+
+        self.assertTrue(results, "没有任何股票成功获取数据")
+        print("\n  指定股票资金流向获取成功：", results)
+
+
 class TestLive(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("RUN_LIVE_TESTS") == "1",
                          "设置 RUN_LIVE_TESTS=1 才运行联网测试")

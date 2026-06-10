@@ -152,7 +152,11 @@ python3 stock_picker.py --selftest
 python3 -m unittest -v test_stock_picker.py
 # 需要联网验证东方财富可达时：
 RUN_LIVE_TESTS=1 python3 -m unittest -v test_stock_picker.TestLive
+# 通过 akshare 真正拉取指定几支股票（茅台/平安/宁德/中芯）的资金流向并校验：
+RUN_LIVE_TESTS=1 python3 -m unittest -v test_stock_picker.TestSpecificStocksFundFlowLive
 ```
+
+> 联网测试若遇到当前网络/代理无法访问东方财富，会自动 **skip**（而非误报失败）。
 
 ---
 
