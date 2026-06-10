@@ -188,6 +188,7 @@ def filter_universe(df: pd.DataFrame, *, exclude_st=True, exclude_kcb=False,
 # 资金流向
 # ─────────────────────────────────────────
 
+# get_money_flow（标准接口）字段：单位“万元”，含主力(主力=超大单+大单)汇总字段。
 MONEY_FLOW_FIELDS = [
     "date", "sec_code", "change_pct",
     "net_amount_main", "net_pct_main",       # 主力净额(万元) / 主力净占比(%)
@@ -195,42 +196,125 @@ MONEY_FLOW_FIELDS = [
     "net_amount_l", "net_pct_l",             # 大单
 ]
 
+# get_money_flow_pro（兜底接口）仅支持以下字段（单位“元”，netflow = inflow - outflow）：
+# 主力 = 超大单(xl) + 大单(l)，据此推导 net_amount_main / net_pct_main 以兼容下游逻辑。
+MONEY_FLOW_PRO_FIELDS = [
+    "inflow_xl", "inflow_l", "inflow_m", "inflow_s",
+    "outflow_xl", "outflow_l", "outflow_m", "outflow_s",
+    "netflow_xl", "netflow_l",
+]
+
+
+def _pro_main_amount(df: pd.DataFrame) -> pd.Series:
+    """主力净额(万元) = (超大单净额 + 大单净额) / 1e4。pro 字段单位为元。"""
+    xl = pd.to_numeric(df.get("netflow_xl"), errors="coerce").fillna(0.0)
+    l = pd.to_numeric(df.get("netflow_l"), errors="coerce").fillna(0.0)
+    return (xl + l) / 1e4
+
+
+def _pro_to_main(df: pd.DataFrame) -> pd.DataFrame:
+    """把 get_money_flow_pro 明细换算为 net_amount_main(万元)/net_pct_main(%)。
+    净占比 = 主力净额 / 当日总成交额 * 100（成交额 = 各档买入额 + 卖出额）。
+    """
+    g = df.copy()
+    flow_cols = ["inflow_xl", "inflow_l", "inflow_m", "inflow_s",
+                 "outflow_xl", "outflow_l", "outflow_m", "outflow_s"]
+    for col in flow_cols:
+        g[col] = (pd.to_numeric(g[col], errors="coerce").fillna(0.0)
+                  if col in g.columns else 0.0)
+    net_main = _pro_main_amount(g) * 1e4                 # 元
+    total = sum(g[c] for c in flow_cols)                 # 元，当日总成交额
+    g["net_amount_main"] = net_main / 1e4               # 万元
+    pct = pd.Series(0.0, index=g.index)
+    nz = total != 0
+    pct[nz] = net_main[nz] / total[nz] * 100
+    g["net_pct_main"] = pct
+    return g
+
+
+def _set_money_flow_index(df: pd.DataFrame) -> pd.DataFrame:
+    """get_money_flow_pro 多标的返回列名为 code，统一索引名为 sec_code。"""
+    idx = "sec_code" if "sec_code" in df.columns else ("code" if "code" in df.columns else None)
+    if idx:
+        df = df.set_index(idx)
+        df.index.name = "sec_code"
+    return df
+
 
 def get_money_flow_oneday(codes, date=None) -> pd.DataFrame:
     """
     获取一批股票某交易日的资金流向。
-    :return: DataFrame[index=聚宽代码], 含 net_amount_main / net_pct_main 等
+    优先用 get_money_flow；若该接口不可用（如账号未开通），自动降级到
+    get_money_flow_pro 并推导主力净额/净占比。
+    :return: DataFrame[index=聚宽代码], 含 net_amount_main / net_pct_main
     """
     ensure_auth()
     jq_codes = [to_jq_code(c) for c in codes]
     d = _to_date_str(date)
+    try:
+        df = fetch_with_retry(
+            "资金流向", jq.get_money_flow,
+            jq_codes, start_date=d, end_date=d, fields=MONEY_FLOW_FIELDS,
+        )
+        if df is not None and not df.empty:
+            return df.set_index("sec_code")
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"  ⚠️  get_money_flow 不可用（{e}）；改用 get_money_flow_pro 兜底"
+              f"（主力=超大单+大单）...")
+        return _money_flow_oneday_via_pro(jq_codes, d)
+
+
+def _money_flow_oneday_via_pro(jq_codes, d) -> pd.DataFrame:
     df = fetch_with_retry(
-        "资金流向", jq.get_money_flow,
-        jq_codes, start_date=d, end_date=d, fields=MONEY_FLOW_FIELDS,
+        "资金流向(pro)", jq.get_money_flow_pro,
+        jq_codes, start_date=d, end_date=d,
+        fields=MONEY_FLOW_PRO_FIELDS, data_type="money",
     )
     if df is None or df.empty:
         return pd.DataFrame()
-    df = df.set_index("sec_code")
-    return df
+    df = _set_money_flow_index(_pro_to_main(df))
+    return df[["net_amount_main", "net_pct_main"]]
 
 
 def get_money_flow_history(codes, end_date=None, count=5) -> dict:
     """
     获取一批股票近 count 个交易日的主力净额序列，用于统计“连续净流入天数”。
+    同样在 get_money_flow 不可用时自动降级到 get_money_flow_pro。
     :return: {聚宽代码: [按日期升序的 net_amount_main, ...]}
     """
     ensure_auth()
     jq_codes = [to_jq_code(c) for c in codes]
     d = _to_date_str(end_date)
+    try:
+        df = fetch_with_retry(
+            "历史资金流向", jq.get_money_flow,
+            jq_codes, end_date=d, count=count,
+            fields=["date", "sec_code", "net_amount_main"],
+        )
+        if df is not None and not df.empty:
+            return {code: g["net_amount_main"].tolist()
+                    for code, g in df.sort_values("date").groupby("sec_code")}
+        return {}
+    except Exception as e:
+        print(f"  ⚠️  历史 get_money_flow 不可用（{e}）；改用 get_money_flow_pro 兜底...")
+        return _money_flow_history_via_pro(jq_codes, d, count)
+
+
+def _money_flow_history_via_pro(jq_codes, d, count) -> dict:
     df = fetch_with_retry(
-        "历史资金流向", jq.get_money_flow,
+        "历史资金流向(pro)", jq.get_money_flow_pro,
         jq_codes, end_date=d, count=count,
-        fields=["date", "sec_code", "net_amount_main"],
+        fields=["netflow_xl", "netflow_l"], data_type="money",
     )
     result = {}
     if df is None or df.empty:
         return result
-    for code, g in df.sort_values("date").groupby("sec_code"):
+    df = df.copy()
+    df["net_amount_main"] = _pro_main_amount(df)
+    code_col = "sec_code" if "sec_code" in df.columns else "code"
+    time_col = "date" if "date" in df.columns else "time"
+    for code, g in df.sort_values(time_col).groupby(code_col):
         result[code] = g["net_amount_main"].tolist()
     return result
 

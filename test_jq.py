@@ -128,6 +128,40 @@ class TestSelector(unittest.TestCase):
         self.assertEqual(c["连续净流入天数"], 2)  # 末两日 300,400 >0
 
 
+class TestMoneyFlowProFallback(unittest.TestCase):
+    """get_money_flow_pro 兜底：由 inflow/outflow/netflow 推导主力净额/净占比"""
+
+    def _pro_df(self):
+        # 单位：元。主力 = 超大单(xl) + 大单(l)
+        return pd.DataFrame({
+            "code": ["600000.XSHG"],
+            "inflow_xl": [6_000_000.0], "inflow_l": [2_000_000.0],
+            "inflow_m": [1_000_000.0], "inflow_s": [1_000_000.0],
+            "outflow_xl": [1_000_000.0], "outflow_l": [1_000_000.0],
+            "outflow_m": [4_000_000.0], "outflow_s": [4_000_000.0],
+            "netflow_xl": [5_000_000.0], "netflow_l": [1_000_000.0],
+        })
+
+    def test_pro_main_amount_in_wan(self):
+        s = jd._pro_main_amount(self._pro_df())
+        # (5,000,000 + 1,000,000) 元 = 600 万元
+        self.assertAlmostEqual(s.iloc[0], 600.0)
+
+    def test_pro_to_main_pct(self):
+        g = jd._pro_to_main(self._pro_df())
+        self.assertAlmostEqual(g["net_amount_main"].iloc[0], 600.0)
+        # 主力净额 600 万 / 总成交额 2000 万 * 100 = 30%
+        self.assertAlmostEqual(g["net_pct_main"].iloc[0], 30.0)
+
+    def test_pro_to_main_zero_total(self):
+        df = self._pro_df()
+        for c in ["inflow_xl", "inflow_l", "inflow_m", "inflow_s",
+                  "outflow_xl", "outflow_l", "outflow_m", "outflow_s"]:
+            df[c] = 0.0
+        g = jd._pro_to_main(df)
+        self.assertEqual(g["net_pct_main"].iloc[0], 0.0)  # 不除零
+
+
 class TestPositionSizing(unittest.TestCase):
     def test_rounds_to_lot(self):
         # 现金10万，30%仓位=3万，价10元 → 3000股
