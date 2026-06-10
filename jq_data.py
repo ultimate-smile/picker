@@ -375,6 +375,61 @@ def get_valuation_oneday(codes, date=None) -> pd.DataFrame:
 
 
 # ─────────────────────────────────────────
+# 日线价格 / 涨跌停（用于过滤涨停板等不可买入标的）
+# ─────────────────────────────────────────
+
+PRICE_FIELDS = ["close", "pre_close", "high", "low",
+                "high_limit", "low_limit", "paused", "volume", "money"]
+
+
+def get_price_oneday(codes, date=None, near_limit_buffer=0.015) -> pd.DataFrame:
+    """获取一批股票某交易日的价格与涨跌停信息，并计算衍生字段。
+
+    :param near_limit_buffer: 收盘价距涨停价的比例阈值（如 0.015=1.5%），
+        小于等于该值视为“接近涨停”。
+    :return: DataFrame[index=聚宽代码]，列含 close/pre_close/high_limit/low_limit、
+        change_pct(涨跌幅%)、dist_to_up(距涨停%)，以及布尔列
+        is_paused/is_limit_up/near_limit_up/is_limit_down。
+    """
+    ensure_auth()
+    jq_codes = [to_jq_code(c) for c in codes]
+    d = _to_date_str(date)
+    df = fetch_with_retry(
+        "日线价格", jq.get_price,
+        jq_codes, end_date=d, count=1, frequency="daily",
+        fields=PRICE_FIELDS, skip_paused=False, fq="pre", panel=False,
+    )
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.copy()
+    if "code" in df.columns:
+        df = df.set_index("code")
+    elif len(jq_codes) == 1 and len(df) == 1:
+        df.index = jq_codes
+    if "time" in df.columns:
+        df = df.drop(columns=["time"])
+
+    for col in ["close", "pre_close", "high_limit", "low_limit"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    close = df["close"]
+    pre = df.get("pre_close")
+    df["change_pct"] = (close - pre) / pre * 100 if pre is not None else float("nan")
+    df["dist_to_up"] = (df["high_limit"] - close) / close * 100
+
+    eps = 1e-4
+    if "paused" in df.columns:
+        df["is_paused"] = pd.to_numeric(df["paused"], errors="coerce").fillna(0) > 0
+    else:
+        df["is_paused"] = False
+    df["is_limit_up"] = close >= (df["high_limit"] - eps)
+    df["near_limit_up"] = df["dist_to_up"] <= (near_limit_buffer * 100)
+    df["is_limit_down"] = close <= (df["low_limit"] + eps)
+    return df
+
+
+# ─────────────────────────────────────────
 # 实时行情 / K线（盘中交易用）
 # ─────────────────────────────────────────
 

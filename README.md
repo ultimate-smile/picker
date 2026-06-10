@@ -52,15 +52,26 @@ python3 jq_main.py --select     # 仅选股并打印候选
 python3 jq_main.py --analyze    # 选股 + Claude 深度分析
 python3 jq_main.py --paper      # 选股 + 本地模拟盘日内交易（推荐，安全）
 python3 jq_main.py --paper --demo  # 用最新价做一次性演示（非交易时段也能跑）
+
+# 自定义股票池（可与上面任一动作组合）
+python3 jq_main.py --select --codes 600000,000001,300750
+python3 jq_main.py --select --watchlist my_list.txt   # 文件内换行/逗号/空格分隔，# 为注释
 ```
 
-### 选股逻辑（`jq_selector.py`）
+### 选股逻辑（`jq_selector.py`）—— 多因子 + 可操作性优先
 
-1. 构建股票池（全 A 股或指定指数成分股）→ 剔除 ST / 次新 / 指定板块；
-2. 按 **市值、换手率** 初筛（`get_valuation`）；
-3. 拉取当日 **主力资金流向**（`get_money_flow`），按 **主力净占比** 筛选排序；
-4. 取前 N 只，补充 **连续主力净流入天数**；
-5. 输出候选股（可建仓或交给 Claude 分析）。
+> 早期版本只按“主力净占比”降序，排在最前的几乎都是**当日涨停/拉升**的票——封死涨停
+> 根本买不进、追高次日易回落，**不适合实际交易**。新策略显式剔除涨停并改用多因子综合分。
+
+1. **股票池**：全 A 股 / 指定指数成分股 / **自定义集合**（`--codes` / `--watchlist` / `JQ_CUSTOM_UNIVERSE`）→ 剔除 ST / 次新 / 指定板块；
+2. **估值初筛**（`get_valuation`）：市值区间 + 换手率**上下限**（过滤流动性差与过热）；
+3. **主力资金流向**：主力净占比落在 `[下限, 上限]` 区间（上限剔除涨停式异常爆量）；
+4. **可操作性过滤**（`get_price`）：剔除 **涨停 / 接近涨停（封板买不进）/ 跌停 / 停牌**，并限制当日涨跌幅在合理区间（默认 -3%~+7%，不追高、不抄弱势）；
+5. **综合评分**：`主力净占比 + 连续净流入 + 涨跌幅健康度 + 换手健康度` 加权（`JQ_SCORE_WEIGHTS`），按综合分排序取前 N；
+6. 输出候选股（可建仓或交给 Claude 分析）。
+
+> 相关参数全部在 `config.py` 可调：`JQ_MIN/MAX_NET_PCT_MAIN`、`JQ_MIN/MAX_TURNOVER`、
+> `JQ_EXCLUDE_NEAR_LIMIT`、`JQ_NEAR_LIMIT_BUFFER`、`JQ_MIN/MAX_CHANGE_PCT`、`JQ_SCORE_WEIGHTS`、`JQ_CUSTOM_UNIVERSE`。
 
 ### 盘中交易（`jq_trader.py`）
 

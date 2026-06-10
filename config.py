@@ -75,10 +75,31 @@ JQ_PASSWORD = ""   # 聚宽密码
 # ── 选股参数（基于聚宽数据）──
 # 选股票池：None=全 A 股；或填指数代码只在成分股里选，如沪深300 "000300.XSHG"
 JQ_UNIVERSE_INDEX = None
-JQ_MIN_NET_PCT_MAIN = 5.0    # 主力资金净占比阈值（%），低于此值不入选
+JQ_MIN_NET_PCT_MAIN = 5.0    # 主力资金净占比下限（%），低于此值不入选
+# 主力净占比上限（%）：过滤异常爆量（多为涨停/拉升后的极端值）；None=不限
+JQ_MAX_NET_PCT_MAIN = 25.0
 JQ_MIN_MARKET_CAP = 50.0     # 最小总市值（亿元）
 JQ_MAX_MARKET_CAP = 1000.0   # 最大总市值（亿元）；None=不限
+JQ_MIN_TURNOVER = 2.0        # 最小换手率（%），过滤流动性差的票；None=不限
 JQ_MAX_TURNOVER = 30.0       # 最大换手率（%），过滤过热炒作；None=不限
+
+# ── 可操作性过滤（避免选出买不进/追高的涨停板）──
+# 剔除涨停及“接近涨停”的股票（封板买不进、追高风险大）
+JQ_EXCLUDE_NEAR_LIMIT = True
+# 收盘价距涨停价 ≤ 该比例视为“接近涨停”，剔除（0.015 = 1.5%）
+JQ_NEAR_LIMIT_BUFFER = 0.015
+# 当日涨跌幅可接受区间（%）：默认 -3% ~ +7%，既不追高也不抄弱势；None=不限
+JQ_MIN_CHANGE_PCT = -3.0
+JQ_MAX_CHANGE_PCT = 7.0
+
+# ── 综合评分权重（候选股按综合分排序，而非单看主力净占比）──
+# inflow=主力净占比, consec=连续净流入, change=涨跌幅健康度, turnover=换手健康度
+JQ_SCORE_WEIGHTS = {"inflow": 0.4, "consec": 0.2, "change": 0.2, "turnover": 0.2}
+
+# ── 自定义股票池 ──
+# 填 6 位或聚宽代码列表则只在该集合内选股（如自选股/行业池）；留空 [] 用全 A 股/指数。
+# 命令行 --codes 600000,000001 或 --watchlist file.txt 会覆盖此项。
+JQ_CUSTOM_UNIVERSE = []
 # 资金流向接口选择：
 #   "pro"   = 只用 get_money_flow_pro（默认；多数账号未开通 get_money_flow 数据权限，
 #             该接口按单量分档返回，主力净额=超大单+大单，净占比=主力净额/当日总成交额，为推导值）

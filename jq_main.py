@@ -8,6 +8,11 @@
     python3 jq_main.py --paper        # 选股 + 本地模拟盘日内交易（安全，推荐）
     python3 jq_main.py --paper --demo # 同上，但用历史价做一次性演示（非交易时段也可跑）
 
+自定义股票池（可与上面任一动作组合）：
+    python3 jq_main.py --select --codes 600000,000001,300750
+    python3 jq_main.py --select --watchlist my_list.txt
+        # watchlist 文件：每行/逗号/空格分隔的代码，# 开头为注释
+
 数据来源：聚宽 JQData（jqdatasdk）
 交易：默认本地模拟盘（PaperBroker）。实盘需自行接券商，或用聚宽策略平台
       （见 jq_strategy_joinquant.py）。
@@ -23,6 +28,51 @@ from datetime import datetime
 import jq_data as jd
 import jq_selector as sel
 import jq_trader as trd
+
+
+def _extract_opt(argv, name):
+    """从 argv 中取 --name value 或 --name=value 的值，没有则返回 None。"""
+    for i, a in enumerate(argv):
+        if a == name and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith(name + "="):
+            return a.split("=", 1)[1]
+    return None
+
+
+def _read_watchlist(path):
+    """读取自选股文件：支持换行/逗号/空格分隔，# 开头为注释。"""
+    codes = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                for tok in line.replace("，", ",").replace("\t", " ").replace(",", " ").split():
+                    if tok:
+                        codes.append(tok)
+    except OSError as e:
+        print(f"⚠️  读取 watchlist 失败：{e}")
+    return codes
+
+
+def _parse_codes(argv):
+    """解析 --codes / --watchlist，返回代码列表或 None（表示用默认股票池）。"""
+    codes = []
+    cv = _extract_opt(argv, "--codes")
+    if cv:
+        codes += [x.strip() for x in cv.replace("，", ",").split(",") if x.strip()]
+    wf = _extract_opt(argv, "--watchlist")
+    if wf:
+        codes += _read_watchlist(wf)
+    # 去重保序
+    seen, uniq = set(), []
+    for c in codes:
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    return uniq or None
 
 
 def cmd_selftest() -> bool:
@@ -98,14 +148,14 @@ def cmd_selftest() -> bool:
     return critical_ok
 
 
-def cmd_select() -> list:
-    candidates = sel.select_candidates()
+def cmd_select(codes=None) -> list:
+    candidates = sel.select_candidates(codes=codes)
     sel.print_candidates(candidates)
     return candidates
 
 
-def cmd_analyze() -> None:
-    candidates = cmd_select()
+def cmd_analyze(codes=None) -> None:
+    candidates = cmd_select(codes=codes)
     if not candidates:
         print("无候选股，跳过分析")
         return
@@ -131,8 +181,8 @@ def cmd_analyze() -> None:
     print("=" * 50)
 
 
-def cmd_paper(demo: bool = False) -> None:
-    candidates = cmd_select()
+def cmd_paper(demo: bool = False, codes=None) -> None:
+    candidates = cmd_select(codes=codes)
     if not candidates:
         print("无候选股，结束")
         return
@@ -149,24 +199,31 @@ def cmd_paper(demo: bool = False) -> None:
 def main(argv=None):
     argv = argv if argv is not None else sys.argv[1:]
     args = set(argv)
+    codes = _parse_codes(argv)
 
     print("=" * 50)
     print("  🚀 聚宽版 选股 + 盘中交易系统")
     print(f"  ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    if codes:
+        print(f"  🎯 自定义股票池：{len(codes)} 只")
     print("=" * 50)
+
+    # 仅含自定义池参数（无显式动作）时，默认执行选股
+    action_flags = {"--selftest", "--diagnose", "--analyze", "--paper", "--select"}
+    has_action = bool(args & action_flags)
 
     try:
         if "--selftest" in args or "--diagnose" in args:
             ok = cmd_selftest()
             return 0 if ok else 1
         if "--analyze" in args:
-            cmd_analyze()
+            cmd_analyze(codes=codes)
             return 0
         if "--paper" in args:
-            cmd_paper(demo="--demo" in args)
+            cmd_paper(demo="--demo" in args, codes=codes)
             return 0
-        if "--select" in args or not args:
-            cmd_select()
+        if "--select" in args or not has_action:
+            cmd_select(codes=codes)
             return 0
     except RuntimeError as e:
         print(f"\n❌ {e}")

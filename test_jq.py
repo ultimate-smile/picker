@@ -14,6 +14,7 @@ import pandas as pd
 import jq_data as jd
 import jq_selector as sel
 import jq_trader as trd
+import jq_main as jm
 
 
 class TestCodeConversion(unittest.TestCase):
@@ -101,9 +102,14 @@ class TestSelector(unittest.TestCase):
         )
         mf = pd.DataFrame(
             {"net_pct_main": [12.0, 3.0],     # 第二只低于阈值，应被剔除
-             "net_amount_main": [5000.0, 100.0],
-             "change_pct": [3, 1]},
+             "net_amount_main": [5000.0, 100.0]},
             index=["600000.XSHG", "000002.XSHE"],
+        )
+        # 价格/涨跌停：第一只温和上涨可操作
+        px = pd.DataFrame(
+            {"change_pct": [3.0], "is_paused": [False], "is_limit_up": [False],
+             "near_limit_up": [False], "is_limit_down": [False]},
+            index=["600000.XSHG"],
         )
         hist = {"600000.XSHG": [100.0, 200.0, -50.0, 300.0, 400.0]}
 
@@ -112,20 +118,115 @@ class TestSelector(unittest.TestCase):
                                side_effect=lambda df, **k: df.loc[["600000.XSHG", "000002.XSHE"]]), \
              mock.patch.object(sel.jd, "get_valuation_oneday", return_value=val), \
              mock.patch.object(sel.jd, "get_money_flow_oneday", return_value=mf), \
+             mock.patch.object(sel.jd, "get_price_oneday", return_value=px), \
              mock.patch.object(sel.jd, "get_money_flow_history", return_value=hist), \
              mock.patch.object(sel.jd, "get_security_name", side_effect=lambda c: "测试股"), \
              mock.patch.object(sel, "JQ_MIN_NET_PCT_MAIN", 5.0), \
+             mock.patch.object(sel, "JQ_MAX_NET_PCT_MAIN", 25.0), \
              mock.patch.object(sel, "JQ_MIN_MARKET_CAP", 50.0), \
              mock.patch.object(sel, "JQ_MAX_MARKET_CAP", 1000.0), \
+             mock.patch.object(sel, "JQ_MIN_TURNOVER", 2.0), \
              mock.patch.object(sel, "JQ_MAX_TURNOVER", 30.0):
             cands = sel.select_candidates(date="2026-06-10")
 
-        # 只剩第一只（市值&净占比都达标）
+        # 只剩第一只（市值&净占比&可操作都达标）
         self.assertEqual(len(cands), 1)
         c = cands[0]
         self.assertEqual(c["代码"], "600000")
         self.assertEqual(c["今日主力净占比"], 12.0)
+        self.assertEqual(c["今日涨跌幅(%)"], 3.0)
         self.assertEqual(c["连续净流入天数"], 2)  # 末两日 300,400 >0
+        self.assertIn("综合评分", c)
+
+    def test_limit_up_filtered_out(self):
+        """涨停/接近涨停的票应被剔除（买不进、追高）"""
+        uni = self._universe()
+        val = pd.DataFrame(
+            {"market_cap": [100.0], "turnover_ratio": [10.0],
+             "circulating_market_cap": [80.0], "pe_ratio": [20], "pb_ratio": [2]},
+            index=["600000.XSHG"],
+        )
+        mf = pd.DataFrame(
+            {"net_pct_main": [20.0], "net_amount_main": [9000.0]},
+            index=["600000.XSHG"],
+        )
+        # 涨停：is_limit_up=True → 应被剔除
+        px = pd.DataFrame(
+            {"change_pct": [10.0], "is_paused": [False], "is_limit_up": [True],
+             "near_limit_up": [True], "is_limit_down": [False]},
+            index=["600000.XSHG"],
+        )
+        with mock.patch.object(sel.jd, "get_universe", return_value=uni), \
+             mock.patch.object(sel.jd, "filter_universe",
+                               side_effect=lambda df, **k: df.loc[["600000.XSHG"]]), \
+             mock.patch.object(sel.jd, "get_valuation_oneday", return_value=val), \
+             mock.patch.object(sel.jd, "get_money_flow_oneday", return_value=mf), \
+             mock.patch.object(sel.jd, "get_price_oneday", return_value=px), \
+             mock.patch.object(sel.jd, "get_money_flow_history", return_value={}), \
+             mock.patch.object(sel.jd, "get_security_name", side_effect=lambda c: "测试股"):
+            cands = sel.select_candidates(date="2026-06-10")
+        self.assertEqual(cands, [])  # 涨停被剔除，无候选
+
+
+class TestCliCodes(unittest.TestCase):
+    """自定义股票池命令行解析"""
+
+    def test_parse_codes_inline(self):
+        self.assertEqual(jm._parse_codes(["--select", "--codes", "600000,000001"]),
+                         ["600000", "000001"])
+
+    def test_parse_codes_equals_and_fullwidth_comma(self):
+        self.assertEqual(jm._parse_codes(["--codes=600000，300750"]),
+                         ["600000", "300750"])
+
+    def test_parse_codes_none(self):
+        self.assertIsNone(jm._parse_codes(["--select"]))
+
+    def test_read_watchlist(self):
+        import tempfile, os
+        content = "# 我的自选\n600000 000001\n300750,\n# 注释行\n688981\n"
+        fd, path = tempfile.mkstemp(suffix=".txt")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+            codes = jm._parse_codes(["--watchlist", path])
+        finally:
+            os.remove(path)
+        self.assertEqual(codes, ["600000", "000001", "300750", "688981"])
+
+
+class TestStrategyScoring(unittest.TestCase):
+    """多因子评分与可操作性过滤"""
+
+    def test_change_score_band(self):
+        self.assertEqual(sel._change_score(3.0), 1.0)     # 温和上涨最佳
+        self.assertEqual(sel._change_score(9.5), 0.0)     # 过热
+        self.assertEqual(sel._change_score(-5.0), 0.0)    # 大跌
+        self.assertGreater(sel._change_score(0.5), 0.0)
+
+    def test_turnover_score_band(self):
+        self.assertEqual(sel._turnover_score(8.0), 1.0)
+        self.assertLess(sel._turnover_score(1.0), 1.0)    # 流动性差
+        self.assertLess(sel._turnover_score(25.0), 1.0)   # 过热
+
+    def test_inflow_and_consec_caps(self):
+        self.assertEqual(sel._inflow_score(50.0), 1.0)    # 20% 封顶
+        self.assertEqual(sel._consec_score(99), 1.0)      # 5 天封顶
+
+    def test_composite_prefers_healthy(self):
+        # 温和上涨 + 健康换手 + 连续流入，应高于追涨停的极端票
+        healthy = sel.composite_score(10.0, 3, 4.0, 8.0)
+        extreme = sel.composite_score(20.0, 0, 9.8, 25.0)
+        self.assertGreater(healthy, extreme)
+
+    def test_is_tradable(self):
+        up = {"is_paused": False, "is_limit_up": True, "near_limit_up": True,
+              "is_limit_down": False}
+        ok = {"is_paused": False, "is_limit_up": False, "near_limit_up": False,
+              "is_limit_down": False}
+        self.assertFalse(sel.is_tradable(up))
+        self.assertTrue(sel.is_tradable(ok))
+        self.assertTrue(sel.is_tradable(up, exclude_near_limit=False))
 
 
 class TestMoneyFlowProFallback(unittest.TestCase):
