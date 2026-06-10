@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 虚拟环境
+venv/
+.venv/
+
+# 运行日志
+logs/
+
+# 编辑器/IDE
+.idea/
+.vscode/
+.DS_Store
