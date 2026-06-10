@@ -7,6 +7,9 @@
 # 获取地址：https://console.anthropic.com/
 # ─────────────────────────────────────────
 ANTHROPIC_API_KEY = "crsr_1fca8f96e8d851b516a313f5dfb0753c07837d3437d86d3f103aa55164a04190"   # ← 替换成你的API Key
+# Claude 模型名（--analyze 生成操作报告时使用）。若 Key 无效/网络不可达，
+# 程序会自动降级为本地规则化操作报告（买入区间/止损/目标价/仓位）。
+CLAUDE_MODEL = "claude-sonnet-4-6"
 
 
 # ─────────────────────────────────────────

@@ -155,29 +155,17 @@ def cmd_select(codes=None) -> list:
 
 
 def cmd_analyze(codes=None) -> None:
-    candidates = cmd_select(codes=codes)
-    if not candidates:
+    # 给 Claude/本地分析器更宽的候选池（JQ_TOP_N），再由其精选到 JQ_FINAL_PICKS
+    pool = sel.select_candidates(codes=codes, top_n=sel.JQ_TOP_N)
+    sel.print_candidates(pool)
+    if not pool:
         print("无候选股，跳过分析")
         return
-    try:
-        from stock_picker import analyze_with_claude
-    except Exception as e:
-        print(f"⚠️  无法加载 Claude 分析模块：{e}")
-        return
 
-    # 适配 analyze_with_claude 期望的字段
-    adapted = [{
-        "代码": c["代码"], "名称": c["名称"], "板块": c["板块"],
-        "今日主力净占比": c["今日主力净占比"],
-        "今日主力净流入(万)": c["今日主力净流入(万)"],
-        "连续净流入天数": c["连续净流入天数"],
-        "近5日主力流向": c["近N日主力流向"],
-    } for c in candidates]
-
-    hot = "（聚宽资金流向选股）"
-    result = analyze_with_claude(adapted, hot)
+    import jq_analyst
+    report = jq_analyst.generate_report(pool, final_picks=sel.JQ_FINAL_PICKS)
     print("\n" + "=" * 50)
-    print(result)
+    print(report)
     print("=" * 50)
 
 

@@ -15,6 +15,7 @@ import jq_data as jd
 import jq_selector as sel
 import jq_trader as trd
 import jq_main as jm
+import jq_analyst as ana
 
 
 class TestCodeConversion(unittest.TestCase):
@@ -243,6 +244,46 @@ class TestCliCodes(unittest.TestCase):
         finally:
             os.remove(path)
         self.assertEqual(codes, ["600000", "000001", "300750", "688981"])
+
+
+class TestAnalystReport(unittest.TestCase):
+    """操作报告：Claude 推送 + 不可用时本地规则化降级"""
+
+    def _cands(self):
+        return [{
+            "代码": "600000", "jq代码": "600000.XSHG", "名称": "测试股",
+            "板块": "主板(沪)", "总市值(亿)": 120.0, "换手率(%)": 8.0,
+            "今日涨跌幅(%)": 3.0, "今日主力净占比": 12.0,
+            "今日主力净流入(万)": 5000.0, "连续净流入天数": 3,
+            "综合评分": 0.8, "近N日主力流向": "+100、+200、+300",
+        }]
+
+    def test_local_report_has_levels(self):
+        rep = ana.local_report(self._cands(), final_picks=3,
+                               price_func=lambda c: 10.0)
+        self.assertIn("操作报告", rep)
+        self.assertIn("买入区间", rep)
+        self.assertIn("止损位", rep)
+        self.assertIn("600000", rep)
+
+    def test_local_report_no_price(self):
+        rep = ana.local_report(self._cands(), price_func=lambda c: 0.0)
+        self.assertIn("无法获取现价", rep)
+
+    def test_generate_report_falls_back_without_key(self):
+        with mock.patch.object(ana, "ANTHROPIC_API_KEY", ""):
+            rep = ana.generate_report(self._cands(), final_picks=3,
+                                      price_func=lambda c: 10.0)
+        self.assertIn("本地规则化", rep)
+
+    def test_generate_report_uses_claude_when_available(self):
+        with mock.patch.object(ana, "analyze_with_claude",
+                               return_value="CLAUDE_REPORT_OK"):
+            rep = ana.generate_report(self._cands(), price_func=lambda c: 10.0)
+        self.assertEqual(rep, "CLAUDE_REPORT_OK")
+
+    def test_generate_report_empty(self):
+        self.assertIn("无候选股", ana.generate_report([]))
 
 
 class TestStrategyScoring(unittest.TestCase):
