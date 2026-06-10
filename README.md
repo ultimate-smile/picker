@@ -133,10 +133,13 @@ pip install akshare --upgrade
 **Q：数据获取失败或返回空**
 AKShare 依赖东方财富接口，非交易时段或节假日可能返回空数据，属正常现象。
 
-**Q：报错 `ProxyError('Unable to connect to proxy', ...)` / `Max retries exceeded`**
+**Q：报错 `ProxyError('Unable to connect to proxy', ...)` / `Connection aborted` / `RemoteDisconnected` / `Max retries exceeded`**
 这是因为你的电脑开启了科学上网/全局代理（VPN、Clash、Shadowsocks 等）。
-东方财富是国内服务器，请求被强行转发到海外代理后反而连不上。本系统默认
-`BYPASS_SYSTEM_PROXY = True`，会在取数时自动绕过系统代理直连。如果仍然报错：
+东方财富是国内服务器，请求被强行转发到代理后反而连不上、或被代理中断连接。
+本系统默认 `BYPASS_SYSTEM_PROXY = True`，会在取数时自动绕过代理直连——
+**不仅清除代理环境变量，还会禁用 `requests` 对 macOS“系统偏好设置-网络-代理”
+里本地代理（如 `127.0.0.1`）的自动探测**，所以即使开着代理软件也能直连。
+如果仍然报错：
 - 确认 `config.py` 中 `BYPASS_SYSTEM_PROXY = True`；
 - 或临时退出代理软件 / 关闭“全局模式”后再运行；
 - 偶发的网络抖动会自动重试（见 `DATA_FETCH_RETRIES`）。

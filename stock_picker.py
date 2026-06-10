@@ -45,11 +45,17 @@ def configure_network() -> None:
     """
     根据配置处理系统代理。
 
-    东方财富是国内服务，若用户开启了全局代理（VPN/Clash 等），requests 会自动
-    读取 HTTP_PROXY / HTTPS_PROXY 等环境变量并强行走代理，导致：
+    东方财富是国内服务，若用户开启了全局代理（VPN/Clash 等），网络库会自动走代理，
+    反而连不上国内行情服务器，导致：
         ProxyError('Unable to connect to proxy', ...)
-    当 BYPASS_SYSTEM_PROXY 为 True 时，清除这些代理环境变量并设置 NO_PROXY，
-    让请求直连国内行情服务器。
+        ('Connection aborted.', RemoteDisconnected(...))
+
+    仅清除环境变量在 macOS 上不够用：requests 还会通过 getproxies() 读取
+    “系统偏好设置-网络-代理”里的本地代理（如 127.0.0.1），所以连接仍会被劫持。
+    因此当 BYPASS_SYSTEM_PROXY 为 True 时，这里同时：
+      1) 清空代理相关环境变量并设置 NO_PROXY；
+      2) 在进程内禁用 requests / curl_cffi 的代理自动探测（含 macOS 系统代理），
+         强制直连。显式传入的 proxies 不受影响。
     """
     if not BYPASS_SYSTEM_PROXY:
         return
@@ -60,15 +66,39 @@ def configure_network() -> None:
     ]
     removed = [v for v in proxy_vars if os.environ.pop(v, None) not in (None, "")]
 
-    # 显式告诉 requests/urllib 这些域名不要走代理
+    # 显式告诉底层库这些域名不要走代理
     no_proxy = "eastmoney.com,push2.eastmoney.com,datacenter-web.eastmoney.com"
     existing = os.environ.get("NO_PROXY", "") or os.environ.get("no_proxy", "")
     merged = ",".join(filter(None, [existing, no_proxy]))
     os.environ["NO_PROXY"] = merged
     os.environ["no_proxy"] = merged
 
+    # 关键：禁用 requests 的代理自动探测（覆盖 macOS 系统代理 + 环境变量）。
+    # get_environ_proxies() 内部调用模块级的 getproxies()，将其替换为返回空字典，
+    # 即可让所有未显式指定 proxies 的请求直连。
+    patched_libs = []
+    try:
+        import requests.utils as _rqu
+
+        _rqu.getproxies = lambda: {}
+        patched_libs.append("requests")
+    except Exception:
+        pass
+
+    # curl_cffi（部分 AKShare 接口使用）默认读取环境变量；上面已清空环境变量即可。
+    try:
+        import curl_cffi  # noqa: F401
+
+        patched_libs.append("curl_cffi(env)")
+    except Exception:
+        pass
+
+    detail = []
     if removed:
-        print(f"🌐 已绕过系统代理直连行情服务器（清除：{', '.join(removed)}）")
+        detail.append(f"清除环境变量：{', '.join(removed)}")
+    if patched_libs:
+        detail.append(f"禁用代理探测：{', '.join(patched_libs)}")
+    print("🌐 已绕过系统代理直连行情服务器" + ("（" + "；".join(detail) + "）" if detail else ""))
 
 
 def fetch_with_retry(label: str, func, *args, **kwargs):
