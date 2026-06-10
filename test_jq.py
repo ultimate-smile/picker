@@ -276,6 +276,19 @@ class TestAnalystReport(unittest.TestCase):
                                       price_func=lambda c: 10.0)
         self.assertIn("本地规则化", rep)
 
+    def test_use_claude_switch_off(self):
+        with mock.patch.object(ana, "USE_CLAUDE", False):
+            self.assertIsNone(ana.analyze_with_claude(self._cands()))
+
+    def test_claude_failure_logs_and_falls_back(self):
+        with mock.patch.object(ana, "USE_CLAUDE", True), \
+             mock.patch.object(ana, "ANTHROPIC_API_KEY", "sk-test"), \
+             mock.patch("anthropic.Anthropic",
+                        side_effect=Exception("connection error")):
+            rep = ana.generate_report(self._cands(), price_func=lambda c: 10.0)
+        # 调用失败应降级到本地报告
+        self.assertIn("本地规则化", rep)
+
     def test_generate_report_uses_claude_when_available(self):
         with mock.patch.object(ana, "analyze_with_claude",
                                return_value="CLAUDE_REPORT_OK"):

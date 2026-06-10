@@ -9,6 +9,7 @@
 确保任何情况下都能给出可执行建议（即“不能调用 Claude 时按最好的设置选股和操作”）。
 """
 
+import traceback
 from datetime import datetime
 
 import jq_data as jd
@@ -23,6 +24,7 @@ def _cfg_get(name, default):
     return getattr(_cfg, name, default) if _cfg is not None else default
 
 
+USE_CLAUDE = _cfg_get("USE_CLAUDE", True)
 CLAUDE_MODEL = _cfg_get("CLAUDE_MODEL", "claude-sonnet-4-6")
 ANTHROPIC_API_KEY = _cfg_get("ANTHROPIC_API_KEY", "")
 
@@ -85,6 +87,9 @@ def build_prompt(candidates, final_picks=3) -> str:
 
 def analyze_with_claude(candidates, final_picks=3):
     """调用 Claude 生成操作报告；不可用时返回 None（由上层降级到本地报告）。"""
+    if not USE_CLAUDE:
+        print("ℹ️  已关闭 Claude（config.USE_CLAUDE=False），使用本地规则化报告。")
+        return None
     if not ANTHROPIC_API_KEY:
         print("⚠️  未配置 ANTHROPIC_API_KEY，跳过 Claude，改用本地规则化报告。")
         return None
@@ -94,7 +99,7 @@ def analyze_with_claude(candidates, final_picks=3):
         print("⚠️  未安装 anthropic（pip install anthropic），改用本地规则化报告。")
         return None
 
-    print("🤖 正在调用 Claude 生成操作报告...")
+    print(f"🤖 正在调用 Claude（{CLAUDE_MODEL}）生成操作报告...")
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         msg = client.messages.create(
@@ -103,7 +108,19 @@ def analyze_with_claude(candidates, final_picks=3):
         )
         return msg.content[0].text
     except Exception as e:
-        print(f"⚠️  Claude 调用失败（{e}），改用本地规则化报告。")
+        # 打印详细错误日志，便于排查 Key 无效 / 网络不可达 / 模型名错误等问题
+        print("─" * 60)
+        print(f"❌ Claude 调用失败：{type(e).__name__}: {e}")
+        status = getattr(e, "status_code", None)
+        if status is not None:
+            print(f"   HTTP 状态码：{status}")
+        body = getattr(e, "body", None) or getattr(e, "response", None)
+        if body is not None:
+            print(f"   响应内容：{body}")
+        print("   完整堆栈：")
+        traceback.print_exc()
+        print("─" * 60)
+        print("↩️  已自动降级为本地规则化报告。")
         return None
 
 
