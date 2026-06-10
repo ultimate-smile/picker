@@ -5,6 +5,7 @@
 """
 
 import os
+import socket
 import time
 from datetime import datetime
 
@@ -127,6 +128,86 @@ def fetch_with_retry(label: str, func, *args, **kwargs):
                 print(f"  ❌ {label}失败（已重试{attempts}次）：{e}")
 
     raise last_err
+
+
+def _is_loopback(host: str) -> bool:
+    """判断地址是否为本机回环地址（代理通常监听在这里）"""
+    return host.startswith("127.") or host in ("::1", "localhost", "0.0.0.0")
+
+
+def diagnose_connectivity(host: str = "push2.eastmoney.com", port: int = 443,
+                          timeout: float = 6.0) -> dict:
+    """
+    诊断到行情服务器的真实连接路径。
+
+    用原生 socket 直接连接，并读取 getpeername()。如果连上的对端是本机回环地址
+    （127.0.0.1 等），说明存在“系统级/透明代理”（Clash TUN、增强模式、全局模式，
+    或注入到进程的 socket 钩子），它在 HTTP 层之下劫持了所有连接——这种情况下任何
+    Python 代理设置都绕不过去，必须在代理软件侧处理。
+    """
+    result = {"host": host, "port": port}
+    try:
+        resolved = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+        result["resolved_ip"] = resolved[0][4][0]
+    except Exception as e:
+        result["resolved_ip"] = None
+        result["dns_error"] = str(e)
+
+    try:
+        s = socket.create_connection((host, port), timeout=timeout)
+        try:
+            peer = s.getpeername()
+            result["peer_ip"] = peer[0]
+            result["hijacked"] = _is_loopback(peer[0])
+            result["ok"] = True
+        finally:
+            s.close()
+    except Exception as e:
+        result["ok"] = False
+        result["connect_error"] = str(e)
+    return result
+
+
+def print_proxy_help() -> None:
+    """数据获取失败时，诊断网络并打印针对性的解决指引"""
+    print("\n" + "─" * 50)
+    print("🩺 正在诊断网络连接...")
+    diag = diagnose_connectivity()
+
+    resolved = diag.get("resolved_ip")
+    peer = diag.get("peer_ip")
+    if resolved:
+        print(f"   行情服务器解析到：{resolved}")
+    if peer:
+        print(f"   实际连接到的对端：{peer}")
+
+    hijacked = diag.get("hijacked")
+    if hijacked or (peer and _is_loopback(peer)):
+        print("\n❗ 检测到连接被本机代理劫持（对端是 127.0.0.1 等回环地址）。")
+        print("   这是 **系统级/透明代理**（如 Clash 的 TUN/增强模式、Surge 增强模式、")
+        print("   或“全局模式”）在网络层拦截了所有连接——它位于 Python 之下，")
+        print("   程序内的任何代理设置都无法绕过。东方财富是国内服务器，被转发到")
+        print("   （连不上海外的）代理后即出现 Connection aborted / RemoteDisconnected。")
+        print("\n✅ 解决办法（任选其一，推荐前两个）：")
+        print("   1. 关闭代理软件的 TUN / 增强模式 / 全局模式（改回“规则/Rule 模式”），")
+        print("      或运行本程序时临时退出代理软件。")
+        print("   2. 在代理软件里给以下域名添加“直连(DIRECT)”规则：")
+        print("        *.eastmoney.com")
+        print("        push2.eastmoney.com")
+        print("        quote.eastmoney.com")
+        print("        datacenter-web.eastmoney.com")
+        print("   3. 验证：在终端执行")
+        print("        curl -v https://push2.eastmoney.com/api/qt/clist/get")
+        print("      若 curl 也连到 127.0.0.1，则确认是系统级代理，需按上面处理。")
+    else:
+        err = diag.get("connect_error") or diag.get("dns_error")
+        if diag.get("ok"):
+            print("\n直连测试本身成功，可能是行情接口偶发抖动或非交易时段返回异常，")
+            print("请稍后重试；若持续失败，可适当调大 config.py 中的 DATA_FETCH_RETRIES。")
+        else:
+            print(f"\n直连失败：{err}")
+            print("可能是本机网络不通、DNS 异常或防火墙拦截。请检查网络连接后重试。")
+    print("─" * 50)
 
 
 # ─────────────────────────────────────────
@@ -470,7 +551,8 @@ def run():
     # Step 2: 获取主力资金流向
     raw_df = fetch_main_force_flow()
     if raw_df.empty:
-        print("❌ 数据获取失败，请检查网络或AKShare版本")
+        print("\n❌ 主力资金流向数据获取失败。")
+        print_proxy_help()
         return
 
     # Step 3: 初步过滤

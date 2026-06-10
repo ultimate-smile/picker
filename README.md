@@ -144,6 +144,15 @@ AKShare 依赖东方财富接口，非交易时段或节假日可能返回空数
 - 或临时退出代理软件 / 关闭“全局模式”后再运行；
 - 偶发的网络抖动会自动重试（见 `DATA_FETCH_RETRIES`）。
 
+**Q：已开启绕过代理，但仍报 `Connection aborted` / `RemoteDisconnected`，且连接到 `127.0.0.1`**
+说明你的代理是 **系统级/透明代理**（Clash 的 **TUN/增强模式**、Surge 增强模式、
+或“**全局模式**”），它在网络层拦截了所有连接，位于 Python 之下，程序内任何代理
+设置都绕不过去。本程序会在取数失败时自动诊断并打印对端地址——若对端是 `127.0.0.1`
+即属此情况。解决办法（任选其一）：
+1. **关闭代理软件的 TUN / 增强模式 / 全局模式**（改回“规则/Rule 模式”），或运行时临时退出代理软件；
+2. 在代理软件里给以下域名加“**直连(DIRECT)**”规则：`*.eastmoney.com`、`push2.eastmoney.com`、`quote.eastmoney.com`、`datacenter-web.eastmoney.com`；
+3. 终端验证：`curl -v https://push2.eastmoney.com/api/qt/clist/get`，若 curl 也连到 `127.0.0.1` 即确认是系统级代理。
+
 **Q：报错 `KeyError: '行业资金流向'`**
 旧版本传入了错误的板块参数。新版已修正为 AKShare 要求的 `"行业资金流"`，
 更新代码后即可正常获取板块资金流向。
