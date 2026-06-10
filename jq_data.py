@@ -105,8 +105,8 @@ def to_jq_code(symbol: str) -> str:
         return f"{s}.XSHG"          # 沪市主板/科创板
     if s[0] in ("0", "3"):
         return f"{s}.XSHE"          # 深市主板/创业板
-    if s[0] in ("4", "8"):
-        return f"{s}.BJSE"          # 北交所
+    if s[0] in ("4", "8", "9"):
+        return f"{s}.BJSE"          # 北交所（4/8 开头，及新代码 920xxx 等 9 开头）
     # 兜底
     return f"{s}.XSHG"
 
@@ -127,8 +127,8 @@ def get_board(code: str) -> str:
         return "创业板"
     if s.startswith("68"):
         return "科创板"
-    if s[0] in ("4", "8"):
-        return "北交所"
+    if s[0] in ("4", "8", "9"):
+        return "北交所"        # 4/8 开头，及新代码 920xxx 等 9 开头
     return "其他"
 
 

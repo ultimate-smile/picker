@@ -24,6 +24,8 @@ class TestCodeConversion(unittest.TestCase):
         self.assertEqual(jd.to_jq_code("300750"), "300750.XSHE")
         self.assertEqual(jd.to_jq_code("688981"), "688981.XSHG")
         self.assertEqual(jd.to_jq_code("830799"), "830799.BJSE")
+        self.assertEqual(jd.to_jq_code("920819"), "920819.BJSE")  # 北交所新代码 9 开头
+        self.assertEqual(jd.to_jq_code("430047"), "430047.BJSE")
         self.assertEqual(jd.to_jq_code("000001.XSHE"), "000001.XSHE")
         self.assertEqual(jd.to_jq_code("1"), "000001.XSHE")
 
@@ -37,6 +39,8 @@ class TestCodeConversion(unittest.TestCase):
         self.assertEqual(jd.get_board("300750"), "创业板")
         self.assertEqual(jd.get_board("688981"), "科创板")
         self.assertEqual(jd.get_board("830799"), "北交所")
+        self.assertEqual(jd.get_board("920819"), "北交所")   # 9 开头新代码
+        self.assertEqual(jd.get_board("430047"), "北交所")
 
 
 class TestConsecutiveInflow(unittest.TestCase):
@@ -166,6 +170,52 @@ class TestSelector(unittest.TestCase):
              mock.patch.object(sel.jd, "get_security_name", side_effect=lambda c: "测试股"):
             cands = sel.select_candidates(date="2026-06-10")
         self.assertEqual(cands, [])  # 涨停被剔除，无候选
+
+    def test_default_returns_final_picks(self):
+        """默认只返回 JQ_FINAL_PICKS 只（如 3 只），而非整个候选池"""
+        n = 8
+        codes = [f"60000{i}.XSHG" for i in range(n)]
+        uni = pd.DataFrame(
+            {"display_name": [f"股{i}" for i in range(n)],
+             "name": [f"S{i}" for i in range(n)],
+             "start_date": ["2010-01-01"] * n, "end_date": ["2200-01-01"] * n},
+            index=codes,
+        )
+        val = pd.DataFrame(
+            {"market_cap": [100.0] * n, "turnover_ratio": [10.0] * n},
+            index=codes,
+        )
+        mf = pd.DataFrame(
+            {"net_pct_main": [10.0 + i for i in range(n)],  # 各不相同便于排序
+             "net_amount_main": [1000.0] * n},
+            index=codes,
+        )
+        px = pd.DataFrame(
+            {"change_pct": [3.0] * n, "is_paused": [False] * n,
+             "is_limit_up": [False] * n, "near_limit_up": [False] * n,
+             "is_limit_down": [False] * n},
+            index=codes,
+        )
+        with mock.patch.object(sel.jd, "get_universe", return_value=uni), \
+             mock.patch.object(sel.jd, "filter_universe", side_effect=lambda df, **k: df), \
+             mock.patch.object(sel.jd, "get_valuation_oneday", return_value=val), \
+             mock.patch.object(sel.jd, "get_money_flow_oneday", return_value=mf), \
+             mock.patch.object(sel.jd, "get_price_oneday", return_value=px), \
+             mock.patch.object(sel.jd, "get_money_flow_history", return_value={}), \
+             mock.patch.object(sel.jd, "get_security_name", side_effect=lambda c: "测试股"), \
+             mock.patch.object(sel, "JQ_FINAL_PICKS", 3):
+            cands = sel.select_candidates(date="2026-06-10")
+        self.assertEqual(len(cands), 3)
+        # 可显式指定数量覆盖默认
+        with mock.patch.object(sel.jd, "get_universe", return_value=uni), \
+             mock.patch.object(sel.jd, "filter_universe", side_effect=lambda df, **k: df), \
+             mock.patch.object(sel.jd, "get_valuation_oneday", return_value=val), \
+             mock.patch.object(sel.jd, "get_money_flow_oneday", return_value=mf), \
+             mock.patch.object(sel.jd, "get_price_oneday", return_value=px), \
+             mock.patch.object(sel.jd, "get_money_flow_history", return_value={}), \
+             mock.patch.object(sel.jd, "get_security_name", side_effect=lambda c: "测试股"):
+            cands5 = sel.select_candidates(date="2026-06-10", top_n=5)
+        self.assertEqual(len(cands5), 5)
 
 
 class TestCliCodes(unittest.TestCase):

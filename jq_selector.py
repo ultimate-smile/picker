@@ -24,37 +24,40 @@ import pandas as pd
 
 import jq_data as jd
 
+# 逐项读取配置：即使 config.py 缺少某些（较新）键，也不会让其它已设置的项失效。
+# （之前用 `from config import (...)` 一次性导入，任一键缺失就会整体回退到默认值，
+#   导致像 JQ_EXCLUDE_BJ=False 这样的用户设置被悄悄忽略。）
 try:
-    from config import (
-        JQ_UNIVERSE_INDEX, JQ_MIN_NET_PCT_MAIN, JQ_MAX_NET_PCT_MAIN,
-        JQ_MIN_MARKET_CAP, JQ_MAX_MARKET_CAP, JQ_MIN_TURNOVER, JQ_MAX_TURNOVER,
-        JQ_HIST_LOOKBACK_DAYS, JQ_TOP_N, JQ_FINAL_PICKS,
-        JQ_EXCLUDE_ST, JQ_EXCLUDE_KCB, JQ_EXCLUDE_BJ, JQ_EXCLUDE_NEW_DAYS,
-        JQ_EXCLUDE_NEAR_LIMIT, JQ_NEAR_LIMIT_BUFFER,
-        JQ_MIN_CHANGE_PCT, JQ_MAX_CHANGE_PCT,
-        JQ_SCORE_WEIGHTS, JQ_CUSTOM_UNIVERSE,
-    )
-except ImportError:  # 合理默认值
-    JQ_UNIVERSE_INDEX = None
-    JQ_MIN_NET_PCT_MAIN = 5.0
-    JQ_MAX_NET_PCT_MAIN = 25.0
-    JQ_MIN_MARKET_CAP = 50.0
-    JQ_MAX_MARKET_CAP = 1000.0
-    JQ_MIN_TURNOVER = 2.0
-    JQ_MAX_TURNOVER = 30.0
-    JQ_HIST_LOOKBACK_DAYS = 5
-    JQ_TOP_N = 20
-    JQ_FINAL_PICKS = 3
-    JQ_EXCLUDE_ST = True
-    JQ_EXCLUDE_KCB = False
-    JQ_EXCLUDE_BJ = True
-    JQ_EXCLUDE_NEW_DAYS = 60
-    JQ_EXCLUDE_NEAR_LIMIT = True
-    JQ_NEAR_LIMIT_BUFFER = 0.015
-    JQ_MIN_CHANGE_PCT = -3.0
-    JQ_MAX_CHANGE_PCT = 7.0
-    JQ_SCORE_WEIGHTS = {"inflow": 0.4, "consec": 0.2, "change": 0.2, "turnover": 0.2}
-    JQ_CUSTOM_UNIVERSE = []
+    import config as _cfg
+except ImportError:
+    _cfg = None
+
+
+def _cfg_get(name, default):
+    return getattr(_cfg, name, default) if _cfg is not None else default
+
+
+JQ_UNIVERSE_INDEX = _cfg_get("JQ_UNIVERSE_INDEX", None)
+JQ_MIN_NET_PCT_MAIN = _cfg_get("JQ_MIN_NET_PCT_MAIN", 5.0)
+JQ_MAX_NET_PCT_MAIN = _cfg_get("JQ_MAX_NET_PCT_MAIN", 25.0)
+JQ_MIN_MARKET_CAP = _cfg_get("JQ_MIN_MARKET_CAP", 50.0)
+JQ_MAX_MARKET_CAP = _cfg_get("JQ_MAX_MARKET_CAP", 1000.0)
+JQ_MIN_TURNOVER = _cfg_get("JQ_MIN_TURNOVER", 2.0)
+JQ_MAX_TURNOVER = _cfg_get("JQ_MAX_TURNOVER", 30.0)
+JQ_HIST_LOOKBACK_DAYS = _cfg_get("JQ_HIST_LOOKBACK_DAYS", 5)
+JQ_TOP_N = _cfg_get("JQ_TOP_N", 20)
+JQ_FINAL_PICKS = _cfg_get("JQ_FINAL_PICKS", 3)
+JQ_EXCLUDE_ST = _cfg_get("JQ_EXCLUDE_ST", True)
+JQ_EXCLUDE_KCB = _cfg_get("JQ_EXCLUDE_KCB", False)
+JQ_EXCLUDE_BJ = _cfg_get("JQ_EXCLUDE_BJ", True)
+JQ_EXCLUDE_NEW_DAYS = _cfg_get("JQ_EXCLUDE_NEW_DAYS", 60)
+JQ_EXCLUDE_NEAR_LIMIT = _cfg_get("JQ_EXCLUDE_NEAR_LIMIT", True)
+JQ_NEAR_LIMIT_BUFFER = _cfg_get("JQ_NEAR_LIMIT_BUFFER", 0.015)
+JQ_MIN_CHANGE_PCT = _cfg_get("JQ_MIN_CHANGE_PCT", -3.0)
+JQ_MAX_CHANGE_PCT = _cfg_get("JQ_MAX_CHANGE_PCT", 7.0)
+JQ_SCORE_WEIGHTS = _cfg_get("JQ_SCORE_WEIGHTS",
+                            {"inflow": 0.4, "consec": 0.2, "change": 0.2, "turnover": 0.2})
+JQ_CUSTOM_UNIVERSE = _cfg_get("JQ_CUSTOM_UNIVERSE", [])
 
 
 # ─────────────────────────────────────────
@@ -195,10 +198,11 @@ def select_candidates(date=None, top_n=None, codes=None) -> list:
     主选股流程，返回候选股列表（按综合评分降序）。
 
     :param codes: 可选，自定义股票集合（6 位或聚宽代码）。传入则只在该集合内选股。
+    :param top_n: 最终返回的候选数量；默认取 config.JQ_FINAL_PICKS（如 3 只）。
     :return: 每个元素为 dict，含 代码/名称/板块/市值/换手率/涨跌幅/主力净占比/
              主力净流入/连续净流入天数/综合评分/近N日主力流向。
     """
-    top_n = top_n or JQ_TOP_N
+    top_n = top_n or JQ_FINAL_PICKS
     d = date or datetime.now().date()
 
     # 1) 股票池
@@ -269,8 +273,8 @@ def select_candidates(date=None, top_n=None, codes=None) -> list:
     if mf.empty:
         return []
 
-    # 5) 预筛（限制历史查询量）→ 连续净流入天数 → 综合评分
-    prelim_n = max(top_n * 3, 30)
+    # 5) 预筛（评分用更宽的池子，最终只取 top_n）→ 连续净流入天数 → 综合评分
+    prelim_n = max(JQ_TOP_N, top_n * 3, 30)
     prelim = mf.sort_values("net_pct_main", ascending=False).head(prelim_n)
     prelim_codes = list(prelim.index)
     print(f"📡 [聚宽] 计算连续净流入天数（{len(prelim_codes)} 只）...")

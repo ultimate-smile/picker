@@ -24,22 +24,26 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, time as dtime
 
+# 逐项读取配置：config.py 缺少某些键时不影响其它已设置项（避免整体回退默认值）。
 try:
-    from config import (
-        TRADE_MODE, TRADE_CAPITAL, MAX_POSITIONS, PER_POSITION_PCT,
-        TAKE_PROFIT_PCT, STOP_LOSS_PCT, TRAIL_STOP_PCT,
-        INTRADAY_POLL_SECONDS, FORCE_CLOSE_BEFORE_END,
-    )
+    import config as _cfg
 except ImportError:
-    TRADE_MODE = "paper"
-    TRADE_CAPITAL = 100000.0
-    MAX_POSITIONS = 3
-    PER_POSITION_PCT = 0.3
-    TAKE_PROFIT_PCT = 0.08
-    STOP_LOSS_PCT = 0.04
-    TRAIL_STOP_PCT = 0.03
-    INTRADAY_POLL_SECONDS = 30
-    FORCE_CLOSE_BEFORE_END = True
+    _cfg = None
+
+
+def _cfg_get(name, default):
+    return getattr(_cfg, name, default) if _cfg is not None else default
+
+
+TRADE_MODE = _cfg_get("TRADE_MODE", "paper")
+TRADE_CAPITAL = _cfg_get("TRADE_CAPITAL", 100000.0)
+MAX_POSITIONS = _cfg_get("MAX_POSITIONS", 3)
+PER_POSITION_PCT = _cfg_get("PER_POSITION_PCT", 0.3)
+TAKE_PROFIT_PCT = _cfg_get("TAKE_PROFIT_PCT", 0.08)
+STOP_LOSS_PCT = _cfg_get("STOP_LOSS_PCT", 0.04)
+TRAIL_STOP_PCT = _cfg_get("TRAIL_STOP_PCT", 0.03)
+INTRADAY_POLL_SECONDS = _cfg_get("INTRADAY_POLL_SECONDS", 30)
+FORCE_CLOSE_BEFORE_END = _cfg_get("FORCE_CLOSE_BEFORE_END", True)
 
 
 # ═════════════════════════════════════════
