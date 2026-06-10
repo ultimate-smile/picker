@@ -119,6 +119,43 @@ tail -f logs/stock_picker.log
 
 ---
 
+## 🧪 连通性自检（数据获取失败时先跑这个）
+
+如果运行时报数据获取失败，先做一次连通性自检，它会**分层诊断**（DNS → TCP → 真实 HTTPS 接口）
+并逐个探测 AKShare 接口，直接告诉你问题出在哪一层：
+
+```bash
+python3 stock_picker.py --selftest
+```
+
+输出示例（关键看 ③ HTTPS 这一层）：
+
+```
+[0] 网络分层诊断（DNS → TCP → HTTPS）
+    DNS : ✅ 120.76.218.228
+    TCP : ✅ 119.3.232.150
+    HTTPS: ❌ ConnectionError: RemoteDisconnected
+[1] AKShare 接口探测
+    ❌ 主力资金流向排行 ...
+```
+
+判读：
+- **③ HTTPS ✅** → 接口可用，刚才多半是偶发抖动/限流，直接重跑即可。
+- **TCP ✅ 但 HTTPS ❌（RemoteDisconnected/reset）** → 连接在 TLS 层被干扰，
+  通常是代理的 **TUN/增强模式** 或 **TLS 审查防火墙/杀毒 HTTPS 扫描**（见下方 FAQ）。
+- **TCP 对端是 `127.0.0.1`** → 本地代理劫持（关闭全局/TUN 模式或加直连规则）。
+- **拿到 HTTP 502 等状态码** → 服务器端临时故障/限流，与代理无关，稍后重跑。
+
+运行单元测试（离线，验证解析、重试、代理绕过、诊断逻辑等）：
+
+```bash
+python3 -m unittest -v test_stock_picker.py
+# 需要联网验证东方财富可达时：
+RUN_LIVE_TESTS=1 python3 -m unittest -v test_stock_picker.TestLive
+```
+
+---
+
 ## ❓ 常见问题
 
 **Q：运行报错 `ModuleNotFoundError: akshare`**

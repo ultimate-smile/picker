@@ -136,78 +136,154 @@ def _is_loopback(host: str) -> bool:
 
 
 def diagnose_connectivity(host: str = "push2.eastmoney.com", port: int = 443,
-                          timeout: float = 6.0) -> dict:
+                          timeout: float = 8.0) -> dict:
     """
-    诊断到行情服务器的真实连接路径。
+    分层诊断到行情服务器的连通性：DNS → TCP → 真实 HTTPS API。
 
-    用原生 socket 直接连接，并读取 getpeername()。如果连上的对端是本机回环地址
-    （127.0.0.1 等），说明存在“系统级/透明代理”（Clash TUN、增强模式、全局模式，
-    或注入到进程的 socket 钩子），它在 HTTP 层之下劫持了所有连接——这种情况下任何
-    Python 代理设置都绕不过去，必须在代理软件侧处理。
+    仅测 TCP 不够：TUN 模式代理 / TLS 审查防火墙会让 TCP 握手成功（且对端显示真实
+    服务器 IP），但在 TLS / HTTP 阶段把连接重置或关闭，表现为
+    RemoteDisconnected / Connection reset。因此这里必须真正发一次 HTTPS 请求。
+
+    返回字典含分层结果：
+      dns_ok / resolved_ip
+      tcp_ok / peer_ip / hijacked(对端是否回环地址=本地代理)
+      http_ok / http_status / http_error / http_body_head
     """
     result = {"host": host, "port": port}
+
+    # ── 1) DNS 解析 ──
     try:
         resolved = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
         result["resolved_ip"] = resolved[0][4][0]
+        result["dns_ok"] = True
     except Exception as e:
-        result["resolved_ip"] = None
+        result["dns_ok"] = False
         result["dns_error"] = str(e)
+        return result
 
+    # ── 2) 原始 TCP 连接（检测是否被本地代理劫持到 127.0.0.1）──
     try:
         s = socket.create_connection((host, port), timeout=timeout)
         try:
-            peer = s.getpeername()
-            result["peer_ip"] = peer[0]
-            result["hijacked"] = _is_loopback(peer[0])
-            result["ok"] = True
+            result["peer_ip"] = s.getpeername()[0]
+            result["hijacked"] = _is_loopback(result["peer_ip"])
+            result["tcp_ok"] = True
         finally:
             s.close()
     except Exception as e:
-        result["ok"] = False
-        result["connect_error"] = str(e)
+        result["tcp_ok"] = False
+        result["tcp_error"] = str(e)
+        return result
+
+    # ── 3) 真实 HTTPS API 请求（这才是 akshare 真正会失败的那一层）──
+    try:
+        import requests
+        url = f"https://{host}/api/qt/clist/get"
+        params = {
+            "fid": "f62", "po": "1", "pz": "1", "pn": "1", "np": "1",
+            "fltt": "2", "invt": "2",
+            "ut": "b2884a393a59ad64002292a3e90d46a5",
+            "fs": "m:0+t:6+f:!2", "fields": "f12,f14,f2,f3,f62",
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/120.0 Safari/537.36",
+            "Referer": "https://data.eastmoney.com/",
+        }
+        r = requests.get(url, params=params, headers=headers, timeout=timeout)
+        result["http_status"] = r.status_code
+        try:
+            j = r.json()
+            result["http_ok"] = r.status_code == 200 and isinstance(j, dict) and "data" in j
+        except Exception:
+            result["http_ok"] = False
+            result["http_body_head"] = r.text[:120]
+    except Exception as e:
+        result["http_ok"] = False
+        result["http_error"] = f"{type(e).__name__}: {e}"
+
     return result
 
 
 def print_proxy_help() -> None:
-    """数据获取失败时，诊断网络并打印针对性的解决指引"""
+    """数据获取失败时，分层诊断网络并打印针对性的解决指引"""
     print("\n" + "─" * 50)
-    print("🩺 正在诊断网络连接...")
-    diag = diagnose_connectivity()
+    print("🩺 正在诊断网络连接（DNS → TCP → HTTPS）...")
+    d = diagnose_connectivity()
 
-    resolved = diag.get("resolved_ip")
-    peer = diag.get("peer_ip")
-    if resolved:
-        print(f"   行情服务器解析到：{resolved}")
-    if peer:
-        print(f"   实际连接到的对端：{peer}")
-
-    hijacked = diag.get("hijacked")
-    if hijacked or (peer and _is_loopback(peer)):
-        print("\n❗ 检测到连接被本机代理劫持（对端是 127.0.0.1 等回环地址）。")
-        print("   这是 **系统级/透明代理**（如 Clash 的 TUN/增强模式、Surge 增强模式、")
-        print("   或“全局模式”）在网络层拦截了所有连接——它位于 Python 之下，")
-        print("   程序内的任何代理设置都无法绕过。东方财富是国内服务器，被转发到")
-        print("   （连不上海外的）代理后即出现 Connection aborted / RemoteDisconnected。")
-        print("\n✅ 解决办法（任选其一，推荐前两个）：")
-        print("   1. 关闭代理软件的 TUN / 增强模式 / 全局模式（改回“规则/Rule 模式”），")
-        print("      或运行本程序时临时退出代理软件。")
-        print("   2. 在代理软件里给以下域名添加“直连(DIRECT)”规则：")
-        print("        *.eastmoney.com")
-        print("        push2.eastmoney.com")
-        print("        quote.eastmoney.com")
-        print("        datacenter-web.eastmoney.com")
-        print("   3. 验证：在终端执行")
-        print("        curl -v https://push2.eastmoney.com/api/qt/clist/get")
-        print("      若 curl 也连到 127.0.0.1，则确认是系统级代理，需按上面处理。")
-    else:
-        err = diag.get("connect_error") or diag.get("dns_error")
-        if diag.get("ok"):
-            print("\n直连测试本身成功，可能是行情接口偶发抖动或非交易时段返回异常，")
-            print("请稍后重试；若持续失败，可适当调大 config.py 中的 DATA_FETCH_RETRIES。")
+    if d.get("resolved_ip"):
+        print(f"   ① DNS 解析：{d['resolved_ip']}  ✅")
+    if d.get("peer_ip"):
+        tag = "（本地代理！）" if d.get("hijacked") else ""
+        print(f"   ② TCP 连接对端：{d['peer_ip']} {tag} {'✅' if d.get('tcp_ok') else '❌'}")
+    if "http_status" in d or "http_error" in d or "http_ok" in d:
+        if d.get("http_ok"):
+            print(f"   ③ HTTPS 接口：HTTP {d.get('http_status')}  ✅")
         else:
-            print(f"\n直连失败：{err}")
-            print("可能是本机网络不通、DNS 异常或防火墙拦截。请检查网络连接后重试。")
+            extra = d.get("http_error") or f"HTTP {d.get('http_status')} {d.get('http_body_head','')}"
+            print(f"   ③ HTTPS 接口：失败  ❌  {extra}")
+
+    print()
+    # ── 分支判断 ──
+    if not d.get("dns_ok"):
+        print(f"❗ DNS 解析失败：{d.get('dns_error')}")
+        print("   本机无法解析域名，多为网络断开或 DNS 配置异常。请检查网络/DNS 后重试。")
+
+    elif d.get("hijacked"):
+        print("❗ 连接被本机代理劫持（对端是 127.0.0.1 等回环地址）。")
+        print("   这是系统级/透明代理在 HTTP 层之下拦截了连接，程序内无法绕过。")
+        _print_proxy_actions()
+
+    elif not d.get("tcp_ok"):
+        print(f"❗ TCP 无法连接行情服务器：{d.get('tcp_error')}")
+        print("   多为本机网络不通、防火墙拦截或服务器临时不可达。请检查网络后重试。")
+
+    elif d.get("http_ok"):
+        print("✅ 诊断显示行情接口此刻可正常访问（HTTPS 返回正常）。")
+        print("   刚才的失败很可能是偶发抖动 / 限流 / 非交易时段返回异常，请直接重跑。")
+        print("   若稳定复现，可能是请求过于频繁被限流，稍等片刻再运行即可。")
+
+    elif "http_status" in d:
+        # 拿到了 HTTP 响应但不是正常数据（如 502/限流/异常返回）→ 服务端问题，非代理
+        print(f"❗ 服务器返回了异常响应（HTTP {d.get('http_status')}），但连接本身是通的。")
+        print("   这属于行情服务器端的临时故障 / 限流（如 502、网关错误），与代理无关。")
+        print("   稍等片刻直接重跑即可；若持续，多为非交易时段或对方接口维护。")
+
+    else:
+        # 连接级异常（无 HTTP 状态码）。区分“被重置/断开”与一般网络错误。
+        err = (d.get("http_error") or "").lower()
+        conn_broken = any(k in err for k in
+                          ("remotedisconnected", "connection reset", "connection aborted",
+                           "aborted", "reset", "eof", "broken pipe"))
+        if conn_broken:
+            print("❗ TCP 能连通，但 HTTPS 请求被中断（Connection reset / RemoteDisconnected）。")
+            print("   这通常不是 AKShare 或接口本身的问题，而是连接在 **TLS/加密层** 被干扰：")
+            print("   • 代理处于 **TUN/增强模式**：TCP 握手能成（对端显示真实 IP），但流量被")
+            print("     路由到（连不上国内站点的）代理核心，导致 TLS 阶段连接被关闭；")
+            print("   • 或有 **TLS 审查的防火墙 / 杀毒软件 HTTPS 扫描** 重置了加密连接。")
+            _print_proxy_actions()
+            print("   4. 若装有杀毒/安全软件的 HTTPS/SSL 扫描，临时关闭它再试。")
+            print("   5. 换一个网络环境（如手机热点）验证是否为当前网络/代理所致。")
+        else:
+            print(f"❗ HTTPS 请求失败：{d.get('http_error')}")
+            print("   连接在加密/传输阶段出错。可能是代理(TUN/增强模式)、TLS 审查、")
+            print("   或网络不稳定。可先按下列方式排查：")
+            _print_proxy_actions()
+            print("   4. 换一个网络环境（如手机热点）验证是否为当前网络/代理所致。")
+
     print("─" * 50)
+
+
+def _print_proxy_actions() -> None:
+    """打印代理类问题的通用处理步骤"""
+    print("\n✅ 解决办法（任选其一，推荐前两个）：")
+    print("   1. 关闭代理软件的 TUN / 增强模式 / 全局模式（改回“规则/Rule 模式”），")
+    print("      或运行本程序时临时退出代理软件。")
+    print("   2. 在代理软件里给以下域名添加“直连(DIRECT)”规则：")
+    print("        *.eastmoney.com  push2.eastmoney.com")
+    print("        quote.eastmoney.com  datacenter-web.eastmoney.com")
+    print("   3. 终端验证：curl -v https://push2.eastmoney.com/api/qt/clist/get")
 
 
 # ─────────────────────────────────────────
@@ -534,6 +610,63 @@ def get_hot_sectors() -> str:
         return "数据解析中"
 
 
+def selftest() -> bool:
+    """
+    连通性自检：在跑完整选股流程前，逐项验证 AKShare 各接口是否可用。
+
+    运行：python3 stock_picker.py --selftest
+    返回 True 表示关键接口（主力资金流向）可用。
+    """
+    print("=" * 50)
+    print("  🧪 AKShare 连通性自检")
+    print("=" * 50)
+
+    configure_network()
+
+    # 先做网络分层诊断
+    print("\n[0] 网络分层诊断（DNS → TCP → HTTPS）")
+    d = diagnose_connectivity()
+    print(f"    DNS : {'✅ ' + str(d.get('resolved_ip')) if d.get('dns_ok') else '❌ ' + str(d.get('dns_error'))}")
+    if "tcp_ok" in d:
+        tag = "（本地代理!）" if d.get("hijacked") else ""
+        print(f"    TCP : {'✅ ' + str(d.get('peer_ip')) + tag if d.get('tcp_ok') else '❌ ' + str(d.get('tcp_error'))}")
+    if "http_ok" in d:
+        print(f"    HTTPS: {'✅ HTTP ' + str(d.get('http_status')) if d.get('http_ok') else '❌ ' + str(d.get('http_error') or d.get('http_status'))}")
+
+    # 逐个接口探测（每个接口都很轻量）
+    checks = [
+        ("主力资金流向排行 stock_individual_fund_flow_rank",
+         lambda: ak.stock_individual_fund_flow_rank(indicator="今日"), True),
+        ("板块资金流向 stock_sector_fund_flow_rank",
+         lambda: ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流"), False),
+        ("个股资金流向 stock_individual_fund_flow(sh:600519)",
+         lambda: ak.stock_individual_fund_flow(stock="600519", market="sh"), False),
+        ("个股信息 stock_individual_info_em(600519)",
+         lambda: ak.stock_individual_info_em(symbol="600519"), False),
+    ]
+
+    print("\n[1] AKShare 接口探测")
+    critical_ok = True
+    for name, fn, critical in checks:
+        try:
+            df = fn()
+            n = len(df) if hasattr(df, "__len__") else "?"
+            print(f"    ✅ {name}  → {n} 行")
+        except Exception as e:
+            print(f"    ❌ {name}  → {type(e).__name__}: {e}")
+            if critical:
+                critical_ok = False
+
+    print("\n" + "=" * 50)
+    if critical_ok:
+        print("  ✅ 自检通过：关键行情接口可用，可正常运行 `python3 stock_picker.py`")
+    else:
+        print("  ❌ 自检失败：关键行情接口不可用。")
+        print_proxy_help()
+    print("=" * 50)
+    return critical_ok
+
+
 def run():
     """主入口：每日选股全流程"""
     print("=" * 50)
@@ -575,4 +708,10 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+    import sys
+
+    if any(a in ("--selftest", "--diagnose", "--test", "-t") for a in sys.argv[1:]):
+        ok = selftest()
+        sys.exit(0 if ok else 1)
+    else:
+        run()
