@@ -50,6 +50,31 @@ class TestConsecutiveInflow(unittest.TestCase):
         self.assertEqual(jd.consecutive_inflow_days(["x", 5]), 1)
 
 
+class TestLastPriceFallback(unittest.TestCase):
+    def test_falls_back_to_get_price_when_tick_unavailable(self):
+        """无实时 tick 权限时应降级到 get_price(分钟/日线)"""
+        called = {"price": 0}
+
+        def fake_get_price(code, **kwargs):
+            called["price"] += 1
+            return pd.DataFrame({"close": [12.34]})
+
+        with mock.patch.object(jd, "ensure_auth", lambda: None), \
+             mock.patch.object(jd.jq, "get_current_tick",
+                               side_effect=Exception("no realtime permission")), \
+             mock.patch.object(jd.jq, "get_price", side_effect=fake_get_price):
+            px = jd.get_last_price("000001.XSHE")
+        self.assertEqual(px, 12.34)
+        self.assertGreaterEqual(called["price"], 1)
+
+    def test_uses_tick_when_available(self):
+        tick_df = pd.DataFrame({"current": [10.5]}, index=[0])
+        with mock.patch.object(jd, "ensure_auth", lambda: None), \
+             mock.patch.object(jd.jq, "get_current_tick", return_value=tick_df):
+            px = jd.get_last_price("000001.XSHE")
+        self.assertEqual(px, 10.5)
+
+
 class TestSelector(unittest.TestCase):
     def _universe(self):
         return pd.DataFrame(

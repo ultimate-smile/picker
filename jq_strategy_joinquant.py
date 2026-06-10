@@ -69,13 +69,16 @@ def pick_candidates(context):
     """与本地 jq_selector.select_candidates 等价的平台版实现"""
     date = context.previous_date  # 用上一交易日资金流向，避免未来函数
 
-    # 股票池：全 A 股，剔除 ST/停牌/次新
-    universe = get_all_securities(types=['stock'], date=date).index.tolist()
+    # 股票池：全 A 股，剔除 ST/停牌/次新（start_date 直接取自证券列表，避免逐只查询）
+    all_secs = get_all_securities(types=['stock'], date=date)
     cur = get_current_data()
-    universe = [s for s in universe
-                if not cur[s].is_st
-                and not cur[s].paused
-                and (context.current_dt.date() - get_security_info(s).start_date).days > 60]
+    today = context.current_dt.date()
+    universe = [
+        s for s, row in all_secs.iterrows()
+        if not cur[s].is_st
+        and not cur[s].paused
+        and (today - row['start_date']).days > 60
+    ]
 
     # 估值初筛（市值、换手率）
     q = query(valuation.code, valuation.market_cap, valuation.turnover_ratio

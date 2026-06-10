@@ -86,7 +86,9 @@ def select_candidates(date=None, top_n=None) -> list:
     print("📡 [聚宽] 拉取当日主力资金流向...")
     mf = jd.get_money_flow_oneday(codes, date=d)
     if mf.empty:
-        print("  ⚠️  资金流向为空（可能非交易日或额度不足）")
+        print("  ⚠️  资金流向为空。可能原因：非交易日 / 当日额度耗尽 / "
+              "账号未开通『资金流向(get_money_flow)』数据权限（部分为付费档位）。")
+        print("      可先运行 `python3 jq_main.py --selftest` 查看各接口可用性。")
         return []
 
     mf = mf.copy()

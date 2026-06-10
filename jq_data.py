@@ -275,18 +275,47 @@ def get_valuation_oneday(codes, date=None) -> pd.DataFrame:
 # 实时行情 / K线（盘中交易用）
 # ─────────────────────────────────────────
 
+def _price_from_get_price(jq_code, frequency) -> float:
+    """用 get_price 取最近一根 bar 的收盘价"""
+    df = jq.get_price(jq_code, end_date=datetime.now(), frequency=frequency,
+                      count=1, fields=["close"], skip_paused=True, panel=False)
+    if df is None or len(df) == 0:
+        return 0.0
+    val = df["close"].iloc[-1]
+    return float(val) if pd.notna(val) else 0.0
+
+
 def get_last_price(code) -> float:
-    """获取最新成交价（盘中用实时 tick；返回 0.0 表示失败）"""
+    """
+    获取最新成交价，按权限/可用性自动降级（返回 0.0 表示失败）：
+      1) get_current_tick —— 实时 tick（需实时行情权限，JQData 较高档位）
+      2) get_price(frequency='1m') —— 最近一分钟收盘（盘中可用，覆盖更广）
+      3) get_price(frequency='daily') —— 最近交易日收盘（盘后/兜底）
+    这样在没有实时 tick 权限的账号上也能正常运行（如做模拟盘/盘后演示）。
+    """
     ensure_auth()
     jq_code = to_jq_code(code)
+
+    # 1) 实时 tick
     try:
-        tick = fetch_with_retry("实时报价", jq.get_current_tick, jq_code)
+        tick = jq.get_current_tick(jq_code)
         if isinstance(tick, pd.DataFrame) and not tick.empty:
-            return float(tick.iloc[0]["current"])
-        if tick is not None and hasattr(tick, "current"):
+            cur = tick.iloc[0]["current"]
+            if pd.notna(cur) and float(cur) > 0:
+                return float(cur)
+        elif tick is not None and hasattr(tick, "current") and tick.current:
             return float(tick.current)
     except Exception:
-        pass
+        pass  # 无实时权限/非交易时段，降级到 K 线
+
+    # 2) 最近一分钟收盘
+    for freq in ("1m", "daily"):
+        try:
+            p = _price_from_get_price(jq_code, freq)
+            if p > 0:
+                return p
+        except Exception:
+            continue
     return 0.0
 
 
