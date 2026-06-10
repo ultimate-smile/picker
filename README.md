@@ -98,6 +98,9 @@ bash run.sh
 | `MIN_MAIN_FORCE_RATIO` | 5.0 | 主力净占比门槛，调高=候选更少但更强 |
 | `TOP_N_CANDIDATES` | 20 | 发给Claude分析的候选数量 |
 | `INCLUDE_BOARDS` | [] | 指定板块，如 `["科创板","创业板"]` |
+| `BYPASS_SYSTEM_PROXY` | True | 取行情数据时绕过系统代理（直连国内服务器），解决代理报错 |
+| `DATA_FETCH_RETRIES` | 3 | 数据请求失败时的最大重试次数 |
+| `DATA_FETCH_RETRY_DELAY` | 3.0 | 首次重试前等待秒数（之后指数退避） |
 
 ---
 
@@ -129,6 +132,18 @@ pip install akshare --upgrade
 
 **Q：数据获取失败或返回空**
 AKShare 依赖东方财富接口，非交易时段或节假日可能返回空数据，属正常现象。
+
+**Q：报错 `ProxyError('Unable to connect to proxy', ...)` / `Max retries exceeded`**
+这是因为你的电脑开启了科学上网/全局代理（VPN、Clash、Shadowsocks 等）。
+东方财富是国内服务器，请求被强行转发到海外代理后反而连不上。本系统默认
+`BYPASS_SYSTEM_PROXY = True`，会在取数时自动绕过系统代理直连。如果仍然报错：
+- 确认 `config.py` 中 `BYPASS_SYSTEM_PROXY = True`；
+- 或临时退出代理软件 / 关闭“全局模式”后再运行；
+- 偶发的网络抖动会自动重试（见 `DATA_FETCH_RETRIES`）。
+
+**Q：报错 `KeyError: '行业资金流向'`**
+旧版本传入了错误的板块参数。新版已修正为 AKShare 要求的 `"行业资金流"`，
+更新代码后即可正常获取板块资金流向。
 
 **Q：想只看科创板和创业板怎么办**
 在 `config.py` 中修改：

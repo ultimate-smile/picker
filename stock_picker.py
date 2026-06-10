@@ -4,11 +4,14 @@
 分析引擎：Claude API
 """
 
+import os
+import time
+from datetime import datetime
+
 import akshare as ak
 import anthropic
 import pandas as pd
-import time
-from datetime import datetime
+
 from config import (
     ANTHROPIC_API_KEY,
     MIN_MAIN_FORCE_RATIO,    # 主力净占比最低阈值（%）
@@ -19,6 +22,82 @@ from config import (
     INCLUDE_BOARDS,          # 包含的板块
 )
 
+# 网络相关配置（旧版 config.py 可能没有这些项，提供默认值兜底）
+try:
+    from config import BYPASS_SYSTEM_PROXY
+except ImportError:
+    BYPASS_SYSTEM_PROXY = True
+try:
+    from config import DATA_FETCH_RETRIES
+except ImportError:
+    DATA_FETCH_RETRIES = 3
+try:
+    from config import DATA_FETCH_RETRY_DELAY
+except ImportError:
+    DATA_FETCH_RETRY_DELAY = 3.0
+
+
+# ─────────────────────────────────────────
+# 0. 网络层（代理与重试）
+# ─────────────────────────────────────────
+
+def configure_network() -> None:
+    """
+    根据配置处理系统代理。
+
+    东方财富是国内服务，若用户开启了全局代理（VPN/Clash 等），requests 会自动
+    读取 HTTP_PROXY / HTTPS_PROXY 等环境变量并强行走代理，导致：
+        ProxyError('Unable to connect to proxy', ...)
+    当 BYPASS_SYSTEM_PROXY 为 True 时，清除这些代理环境变量并设置 NO_PROXY，
+    让请求直连国内行情服务器。
+    """
+    if not BYPASS_SYSTEM_PROXY:
+        return
+
+    proxy_vars = [
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "all_proxy",
+    ]
+    removed = [v for v in proxy_vars if os.environ.pop(v, None) not in (None, "")]
+
+    # 显式告诉 requests/urllib 这些域名不要走代理
+    no_proxy = "eastmoney.com,push2.eastmoney.com,datacenter-web.eastmoney.com"
+    existing = os.environ.get("NO_PROXY", "") or os.environ.get("no_proxy", "")
+    merged = ",".join(filter(None, [existing, no_proxy]))
+    os.environ["NO_PROXY"] = merged
+    os.environ["no_proxy"] = merged
+
+    if removed:
+        print(f"🌐 已绕过系统代理直连行情服务器（清除：{', '.join(removed)}）")
+
+
+def fetch_with_retry(label: str, func, *args, **kwargs):
+    """
+    带指数退避重试的数据请求包装器。
+
+    :param label: 用于日志显示的中文名称
+    :param func:  实际执行的取数函数（通常是 akshare 接口）
+    :return:      func 的返回值；若全部重试失败则向上抛出最后一次异常
+    """
+    attempts = max(1, int(DATA_FETCH_RETRIES))
+    delay = max(0.0, float(DATA_FETCH_RETRY_DELAY))
+    last_err = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            last_err = e
+            if attempt < attempts:
+                wait = delay * (2 ** (attempt - 1))
+                print(f"  ⚠️  {label}失败（第{attempt}/{attempts}次）：{e}")
+                print(f"      {wait:.0f}秒后重试...")
+                time.sleep(wait)
+            else:
+                print(f"  ❌ {label}失败（已重试{attempts}次）：{e}")
+
+    raise last_err
+
 
 # ─────────────────────────────────────────
 # 1. 数据采集层
@@ -28,10 +107,12 @@ def fetch_main_force_flow() -> pd.DataFrame:
     """获取今日全市场主力资金流向排行"""
     print("📡 正在获取主力资金流向数据...")
     try:
-        df = ak.stock_individual_fund_flow_rank(indicator="今日")
-        return df
-    except Exception as e:
-        print(f"  ⚠️  资金流向获取失败: {e}")
+        return fetch_with_retry(
+            "资金流向获取",
+            ak.stock_individual_fund_flow_rank,
+            indicator="今日",
+        )
+    except Exception:
         return pd.DataFrame()
 
 
@@ -39,29 +120,42 @@ def fetch_sector_flow() -> pd.DataFrame:
     """获取今日板块资金流向，找出最热板块"""
     print("📡 正在获取板块资金流向...")
     try:
-        df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流向")
-        return df
-    except Exception as e:
-        print(f"  ⚠️  板块数据获取失败: {e}")
+        # 注意：AKShare 的 sector_type 合法取值为
+        # "行业资金流" / "概念资金流" / "地域资金流"（不是 "行业资金流向"）
+        return fetch_with_retry(
+            "板块数据获取",
+            ak.stock_sector_fund_flow_rank,
+            indicator="今日",
+            sector_type="行业资金流",
+        )
+    except Exception:
         return pd.DataFrame()
 
 
 def fetch_stock_info(symbol: str) -> dict:
     """获取单只股票基本信息（市值等）"""
     try:
-        df = ak.stock_individual_info_em(symbol=symbol)
-        info = dict(zip(df["item"], df["value"]))
-        return info
-    except:
+        df = fetch_with_retry(
+            f"{symbol} 基本信息获取",
+            ak.stock_individual_info_em,
+            symbol=symbol,
+        )
+        return dict(zip(df["item"], df["value"]))
+    except Exception:
         return {}
 
 
 def fetch_hist_flow(symbol: str, days: int = 5) -> pd.DataFrame:
     """获取个股近N日历史资金流向"""
     try:
-        df = ak.stock_individual_fund_flow(stock=symbol, market="sh" if symbol.startswith("6") else "sz")
+        df = fetch_with_retry(
+            f"{symbol} 历史资金流向获取",
+            ak.stock_individual_fund_flow,
+            stock=symbol,
+            market="sh" if symbol.startswith("6") else "sz",
+        )
         return df.tail(days)
-    except:
+    except Exception:
         return pd.DataFrame()
 
 
@@ -189,9 +283,9 @@ def enrich_candidates(df: pd.DataFrame) -> list[dict]:
             # 尝试找主力净流入列
             flow_col = None
             for col in hist.columns:
-            	if "主力" in col and "净流入" in col:
-            		flow_col = col
-            		break
+                if "主力" in col and "净流入" in col:
+                    flow_col = col
+                    break
 
             if flow_col:
                 recent_flows = hist[flow_col].tolist()
@@ -335,6 +429,9 @@ def run():
     print(f"  🚀 自动化选股系统启动")
     print(f"  ⏰ 运行时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 50)
+
+    # Step 0: 配置网络（按需绕过系统代理，避免国内行情服务器连不上）
+    configure_network()
 
     # Step 1: 获取热门板块
     hot_sectors = get_hot_sectors()
