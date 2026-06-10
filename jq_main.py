@@ -43,6 +43,19 @@ def cmd_selftest() -> bool:
         print(f"⚠️  额度查询失败：{e}")
 
     sample = "000001.XSHE"
+
+    # 资金流向探测：按 config.JQ_MONEY_FLOW_API 选择实际使用的接口
+    if jd.JQ_MONEY_FLOW_API == "basic":
+        mf_probe = ("资金流向 get_money_flow（主力净占比，部分账号需付费）",
+                    lambda: jq.get_money_flow(
+                        sample, count=1,
+                        fields=["sec_code", "net_amount_main", "net_pct_main"]), True)
+    else:
+        mf_probe = ("资金流向 get_money_flow_pro（按单量分档，推导主力净额）",
+                    lambda: jq.get_money_flow_pro(
+                        sample, count=1,
+                        fields=["netflow_xl", "netflow_l"], data_type="money"), True)
+
     # 逐个接口探测：name, 调用, 是否关键
     probes = [
         ("证券列表 get_all_securities",
@@ -50,9 +63,7 @@ def cmd_selftest() -> bool:
         ("估值表 get_valuation（市值/换手）",
          lambda: jq.get_valuation(sample, count=1,
                                   fields=["code", "market_cap", "turnover_ratio"]), True),
-        ("资金流向 get_money_flow（主力净占比，部分账号需付费）",
-         lambda: jq.get_money_flow(sample, count=1,
-                                   fields=["sec_code", "net_amount_main", "net_pct_main"]), True),
+        mf_probe,
         ("日线 get_price(daily)",
          lambda: jq.get_price(sample, count=1, frequency="daily", fields=["close"]), False),
         ("分钟线 get_price(1m)",

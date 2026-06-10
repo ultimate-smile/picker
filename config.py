@@ -80,12 +80,11 @@ JQ_MIN_MARKET_CAP = 50.0     # 最小总市值（亿元）
 JQ_MAX_MARKET_CAP = 1000.0   # 最大总市值（亿元）；None=不限
 JQ_MAX_TURNOVER = 30.0       # 最大换手率（%），过滤过热炒作；None=不限
 # 资金流向接口选择：
-#   "auto"  = 先用 get_money_flow（直接给主力净额/净占比），不可用时自动降级到
-#             get_money_flow_pro 并推导（默认，最稳）
+#   "pro"   = 只用 get_money_flow_pro（默认；多数账号未开通 get_money_flow 数据权限，
+#             该接口按单量分档返回，主力净额=超大单+大单，净占比=主力净额/当日总成交额，为推导值）
 #   "basic" = 只用 get_money_flow（账号已开通该数据时最精确）
-#   "pro"   = 只用 get_money_flow_pro（账号未开通 get_money_flow 时用，省去失败重试的延迟；
-#             主力净额=超大单+大单，净占比=主力净额/当日总成交额，为推导近似值）
-JQ_MONEY_FLOW_API = "auto"
+#   "auto"  = 先用 get_money_flow，不可用时自动降级到 get_money_flow_pro 并推导
+JQ_MONEY_FLOW_API = "pro"
 JQ_HIST_LOOKBACK_DAYS = 5    # 统计“连续主力净流入天数”回看的交易日数
 JQ_TOP_N = 20                # 进入深度分析的候选数量
 JQ_FINAL_PICKS = 3           # 最终建仓只数
