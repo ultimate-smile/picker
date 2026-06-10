@@ -47,7 +47,7 @@ echo ""
 echo "📥 安装依赖包..."
 source venv/bin/activate
 pip install --upgrade pip -q
-pip install akshare anthropic pandas -q
+pip install akshare anthropic pandas jqdatasdk -q
 echo -e "${GREEN}✅ 依赖安装完成${NC}"
 
 # 检查 API Key 配置

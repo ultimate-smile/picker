@@ -61,3 +61,42 @@ DATA_FETCH_RETRY_DELAY = 3.0  # 首次重试前的等待秒数（之后按指数
 #   - 收盘后（15:30–16:00）：获取当日完整数据，分析明日机会
 #   - 早盘前（09:00–09:15）：运行前一交易日收盘数据，辅助今日决策
 RUN_AFTER_CLOSE = True   # True=收盘后运行，False=开盘前运行
+
+
+# ═════════════════════════════════════════════════════════════════
+# 聚宽（JoinQuant / JQData）配置  —— 见 jq_main.py / jq_data.py
+# ═════════════════════════════════════════════════════════════════
+# 在 https://www.joinquant.com/ 注册后获得账号（手机号）与密码。
+# jqdatasdk 免费额度有限（每日若干万~千万条），请合理使用。
+# 也可用环境变量 JQ_USERNAME / JQ_PASSWORD 覆盖下面的值（更安全）。
+JQ_USERNAME = ""   # 聚宽账号（注册手机号）
+JQ_PASSWORD = ""   # 聚宽密码
+
+# ── 选股参数（基于聚宽数据）──
+# 选股票池：None=全 A 股；或填指数代码只在成分股里选，如沪深300 "000300.XSHG"
+JQ_UNIVERSE_INDEX = None
+JQ_MIN_NET_PCT_MAIN = 5.0    # 主力资金净占比阈值（%），低于此值不入选
+JQ_MIN_MARKET_CAP = 50.0     # 最小总市值（亿元）
+JQ_MAX_MARKET_CAP = 1000.0   # 最大总市值（亿元）；None=不限
+JQ_MAX_TURNOVER = 30.0       # 最大换手率（%），过滤过热炒作；None=不限
+JQ_HIST_LOOKBACK_DAYS = 5    # 统计“连续主力净流入天数”回看的交易日数
+JQ_TOP_N = 20                # 进入深度分析的候选数量
+JQ_FINAL_PICKS = 3           # 最终建仓只数
+JQ_EXCLUDE_ST = True         # 排除 ST/*ST
+JQ_EXCLUDE_KCB = False       # 排除科创板（68 开头）
+JQ_EXCLUDE_BJ = True         # 排除北交所（4/8 开头）
+JQ_EXCLUDE_NEW_DAYS = 60     # 排除上市不足 N 个自然日的次新股
+
+# ── 盘中交易参数 ──
+# 交易模式：
+#   "paper" = 本地模拟盘（用聚宽实时行情撮合，安全，强烈推荐先用它）
+#   "live"  = 实盘（jqdatasdk 不能下单，需自行接入券商 API，见 jq_trader.py）
+TRADE_MODE = "paper"
+TRADE_CAPITAL = 100000.0     # 模拟盘初始资金（元）
+MAX_POSITIONS = 3            # 最大同时持仓只数
+PER_POSITION_PCT = 0.3       # 单只目标仓位占总资金比例（0.3=30%）
+TAKE_PROFIT_PCT = 0.08       # 止盈：浮盈达到 +8% 卖出
+STOP_LOSS_PCT = 0.04         # 止损：浮亏达到 -4% 卖出
+TRAIL_STOP_PCT = 0.03        # 移动止盈：从最高点回撤 3% 卖出（锁定利润）
+INTRADAY_POLL_SECONDS = 30   # 盘中轮询间隔（秒）
+FORCE_CLOSE_BEFORE_END = True  # 收盘前是否清仓（做 T/日内策略时建议 True）

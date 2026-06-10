@@ -8,14 +8,75 @@
 
 ```
 stock_picker/
-├── stock_picker.py   # 主程序
-├── config.py         # 配置文件（你需要修改这个）
-├── setup.sh          # 一键安装脚本
-├── run.sh            # 每日手动运行
-├── setup_cron.sh     # 设置每日自动运行
-├── logs/             # 运行日志（自动生成）
-└── README.md         # 本文件
+├── stock_picker.py            # AKShare 版主程序（东方财富数据源）
+├── config.py                  # 配置文件（你需要修改这个）
+│
+├── jq_main.py                 # 🆕 聚宽版主入口（选股 + 盘中交易）
+├── jq_data.py                 # 🆕 聚宽数据层（jqdatasdk 封装）
+├── jq_selector.py             # 🆕 聚宽选股逻辑
+├── jq_trader.py               # 🆕 盘中交易引擎（模拟盘/风控/券商抽象）
+├── jq_strategy_joinquant.py   # 🆕 聚宽“策略平台”实盘/回测策略模板
+├── test_stock_picker.py       # AKShare 版单元测试
+├── test_jq.py                 # 🆕 聚宽版单元测试
+│
+├── setup.sh / run.sh / setup_cron.sh
+└── README.md
 ```
+
+---
+
+## 🆕 聚宽（JoinQuant / jqdatasdk）版本
+
+用聚宽 JQData 重新实现了选股与盘中交易逻辑，作为 AKShare 版的替代/增强。
+数据更规范、字段统一，且自带实时行情与分钟 K 线，适合做日内交易。
+
+### 安装与配置
+
+```bash
+pip install -U jqdatasdk
+```
+
+在 [joinquant.com](https://www.joinquant.com/) 注册账号后，编辑 `config.py`：
+
+```python
+JQ_USERNAME = "你的聚宽账号(手机号)"
+JQ_PASSWORD = "你的聚宽密码"
+```
+（也可用环境变量 `JQ_USERNAME` / `JQ_PASSWORD`，更安全。）
+
+### 使用
+
+```bash
+python3 jq_main.py --selftest   # 登录聚宽 + 检查额度/连通性
+python3 jq_main.py --select     # 仅选股并打印候选
+python3 jq_main.py --analyze    # 选股 + Claude 深度分析
+python3 jq_main.py --paper      # 选股 + 本地模拟盘日内交易（推荐，安全）
+python3 jq_main.py --paper --demo  # 用最新价做一次性演示（非交易时段也能跑）
+```
+
+### 选股逻辑（`jq_selector.py`）
+
+1. 构建股票池（全 A 股或指定指数成分股）→ 剔除 ST / 次新 / 指定板块；
+2. 按 **市值、换手率** 初筛（`get_valuation`）；
+3. 拉取当日 **主力资金流向**（`get_money_flow`），按 **主力净占比** 筛选排序；
+4. 取前 N 只，补充 **连续主力净流入天数**；
+5. 输出候选股（可建仓或交给 Claude 分析）。
+
+### 盘中交易（`jq_trader.py`）
+
+- **`PaperBroker`（本地模拟盘）**：用聚宽实时行情撮合，计佣金/印花税，安全，强烈建议先用它验证策略；
+- 风控：**止盈 / 止损 / 移动止盈**（参数见 `config.py`），可尾盘清仓；
+- **`Broker` 抽象**：实盘下单需自行接入券商接口（`LiveBroker` 为占位）。
+
+> ⚠️ **关于实盘交易的重要说明**：`jqdatasdk` 只能取数，**不能下单**。真正的自动交易有两条合规途径：
+> 1. 在 **聚宽策略平台** 上运行 `jq_strategy_joinquant.py`（平台提供 `order_target_value` 等下单 API，对接券商做模拟/实盘）；
+> 2. 本地接入 **券商交易接口**（QMT/Ptrade、easytrader 等），并实现 `jq_trader.LiveBroker`。
+
+### 风险与收益的诚实说明
+
+> 本系统（含“最大化获利”的目标）通过 **资金面动量选股 + 严格风控** 来 *争取* 收益，
+> 但**没有任何策略能保证盈利**。历史表现不代表未来收益，市场有不可预测的风险。
+> 请务必先在模拟盘充分验证、控制仓位，实盘后果自负。
 
 ---
 
