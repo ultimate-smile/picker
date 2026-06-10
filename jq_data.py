@@ -20,6 +20,11 @@ import pandas as pd
 from stock_picker import configure_network, fetch_with_retry
 
 try:
+    from config import JQ_MONEY_FLOW_API
+except ImportError:
+    JQ_MONEY_FLOW_API = "auto"
+
+try:
     import jqdatasdk as jq
 except ImportError:  # 友好提示
     jq = None
@@ -244,13 +249,19 @@ def _set_money_flow_index(df: pd.DataFrame) -> pd.DataFrame:
 def get_money_flow_oneday(codes, date=None) -> pd.DataFrame:
     """
     获取一批股票某交易日的资金流向。
-    优先用 get_money_flow；若该接口不可用（如账号未开通），自动降级到
-    get_money_flow_pro 并推导主力净额/净占比。
+    接口选择由 config.JQ_MONEY_FLOW_API 决定：
+      auto  —— 先 get_money_flow，不可用时自动降级到 get_money_flow_pro 并推导；
+      basic —— 只用 get_money_flow；
+      pro   —— 只用 get_money_flow_pro 并推导主力净额/净占比。
     :return: DataFrame[index=聚宽代码], 含 net_amount_main / net_pct_main
     """
     ensure_auth()
     jq_codes = [to_jq_code(c) for c in codes]
     d = _to_date_str(date)
+
+    if JQ_MONEY_FLOW_API == "pro":
+        return _money_flow_oneday_via_pro(jq_codes, d)
+
     try:
         df = fetch_with_retry(
             "资金流向", jq.get_money_flow,
@@ -260,6 +271,8 @@ def get_money_flow_oneday(codes, date=None) -> pd.DataFrame:
             return df.set_index("sec_code")
         return pd.DataFrame()
     except Exception as e:
+        if JQ_MONEY_FLOW_API == "basic":
+            raise
         print(f"  ⚠️  get_money_flow 不可用（{e}）；改用 get_money_flow_pro 兜底"
               f"（主力=超大单+大单）...")
         return _money_flow_oneday_via_pro(jq_codes, d)
@@ -286,6 +299,10 @@ def get_money_flow_history(codes, end_date=None, count=5) -> dict:
     ensure_auth()
     jq_codes = [to_jq_code(c) for c in codes]
     d = _to_date_str(end_date)
+
+    if JQ_MONEY_FLOW_API == "pro":
+        return _money_flow_history_via_pro(jq_codes, d, count)
+
     try:
         df = fetch_with_retry(
             "历史资金流向", jq.get_money_flow,
@@ -297,6 +314,8 @@ def get_money_flow_history(codes, end_date=None, count=5) -> dict:
                     for code, g in df.sort_values("date").groupby("sec_code")}
         return {}
     except Exception as e:
+        if JQ_MONEY_FLOW_API == "basic":
+            raise
         print(f"  ⚠️  历史 get_money_flow 不可用（{e}）；改用 get_money_flow_pro 兜底...")
         return _money_flow_history_via_pro(jq_codes, d, count)
 
