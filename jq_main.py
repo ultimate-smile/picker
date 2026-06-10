@@ -51,7 +51,7 @@ def cmd_selftest() -> bool:
          lambda: jq.get_valuation(sample, count=1,
                                   fields=["code", "market_cap", "turnover_ratio"]), True),
         ("资金流向 get_money_flow（主力净占比，部分账号需付费）",
-         lambda: jq.get_money_flow(sample, count=1,
+         lambda: jq.get_money_flow_pro(sample, count=1,
                                    fields=["sec_code", "net_amount_main", "net_pct_main"]), True),
         ("日线 get_price(daily)",
          lambda: jq.get_price(sample, count=1, frequency="daily", fields=["close"]), False),

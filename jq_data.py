@@ -205,7 +205,7 @@ def get_money_flow_oneday(codes, date=None) -> pd.DataFrame:
     jq_codes = [to_jq_code(c) for c in codes]
     d = _to_date_str(date)
     df = fetch_with_retry(
-        "资金流向", jq.get_money_flow,
+        "资金流向", jq.get_money_flow_pro,
         jq_codes, start_date=d, end_date=d, fields=MONEY_FLOW_FIELDS,
     )
     if df is None or df.empty:
@@ -223,7 +223,7 @@ def get_money_flow_history(codes, end_date=None, count=5) -> dict:
     jq_codes = [to_jq_code(c) for c in codes]
     d = _to_date_str(end_date)
     df = fetch_with_retry(
-        "历史资金流向", jq.get_money_flow,
+        "历史资金流向", jq.get_money_flow_pro,
         jq_codes, end_date=d, count=count,
         fields=["date", "sec_code", "net_amount_main"],
     )
