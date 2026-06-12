@@ -4,6 +4,7 @@
 用法：
     python3 jq_main.py --selftest     # 登录聚宽并检查额度/接口连通性
     python3 jq_main.py --select       # 仅选股并打印候选
+    python3 jq_main.py --deep         # 多维度综合评估选股 + 买卖价位 + 持有建议（推荐）
     python3 jq_main.py --analyze      # 选股 + Claude 深度分析（需配置 ANTHROPIC_API_KEY）
     python3 jq_main.py --paper        # 选股 + 本地模拟盘日内交易（安全，推荐）
     python3 jq_main.py --paper --demo # 同上，但用历史价做一次性演示（非交易时段也可跑）
@@ -75,6 +76,15 @@ def _parse_codes(argv):
     return uniq or None
 
 
+def _probe_fundamentals():
+    """探测 get_fundamentals（基本面维度依赖）。"""
+    import jqdatasdk as jq
+    from jqdatasdk import query, indicator
+    q = (query(indicator.code, indicator.inc_revenue_year_on_year)
+         .filter(indicator.code.in_(["000001.XSHE"])))
+    return jq.get_fundamentals(q, statDate="2024q4")
+
+
 def cmd_selftest() -> bool:
     """登录聚宽并逐个探测各数据接口的可用性（部分数据需付费档位）"""
     print("=" * 50)
@@ -120,6 +130,14 @@ def cmd_selftest() -> bool:
          lambda: jq.get_price(sample, count=1, frequency="1m", fields=["close"]), False),
         ("实时tick get_current_tick（需实时行情权限）",
          lambda: jq.get_current_tick(sample), False),
+        # ── 多维度评估（--deep）所需接口 ──
+        ("基本面 get_fundamentals（营收/毛利/净利/现金流）",
+         _probe_fundamentals, False),
+        ("解禁 get_locked_shares（消息面利空规避）",
+         lambda: jq.get_locked_shares([sample],
+                                      start_date=datetime.now().strftime("%Y-%m-%d"),
+                                      end_date=datetime.now().strftime("%Y-%m-%d")), False),
+        ("行业 get_industry（板块归属）", lambda: jq.get_industry(sample), False),
     ]
 
     print("\n[接口可用性探测]")
@@ -152,6 +170,18 @@ def cmd_select(codes=None) -> list:
     candidates = sel.select_candidates(codes=codes)
     sel.print_candidates(candidates)
     return candidates
+
+
+def cmd_deep(codes=None) -> None:
+    """多维度综合评估：技术/基本面/筹码/大盘板块/消息催化 加权打分 + 操作持有建议。"""
+    import jq_deep
+    picks = jq_deep.select_deep(codes=codes)
+    if not picks:
+        print("无符合条件的标的，建议观望。")
+        return
+    print("\n" + "=" * 50)
+    print(jq_deep.format_report(picks))
+    print("=" * 50)
 
 
 def cmd_analyze(codes=None) -> None:
@@ -197,13 +227,17 @@ def main(argv=None):
     print("=" * 50)
 
     # 仅含自定义池参数（无显式动作）时，默认执行选股
-    action_flags = {"--selftest", "--diagnose", "--analyze", "--paper", "--select"}
+    action_flags = {"--selftest", "--diagnose", "--analyze", "--paper",
+                    "--select", "--deep"}
     has_action = bool(args & action_flags)
 
     try:
         if "--selftest" in args or "--diagnose" in args:
             ok = cmd_selftest()
             return 0 if ok else 1
+        if "--deep" in args:
+            cmd_deep(codes=codes)
+            return 0
         if "--analyze" in args:
             cmd_analyze(codes=codes)
             return 0

@@ -496,3 +496,198 @@ def get_security_name(code) -> str:
         return getattr(info, "display_name", from_jq_code(code))
     except Exception:
         return from_jq_code(code)
+
+
+# ─────────────────────────────────────────
+# 多维度评估用数据（K线 / 财务 / 解禁 / 指数 / 北向 / 行业）
+# ─────────────────────────────────────────
+
+def get_daily_bars(code, end_date=None, count=120) -> pd.DataFrame:
+    """取日线 K 线（前复权），按时间升序。
+
+    :return: DataFrame[index=日期], columns: close/high/low/open/volume/money/turnover
+        其中 turnover(换手率%) 由 get_valuation 合并（取不到则为 NaN，不影响 K 线指标）。
+    """
+    ensure_auth()
+    jq_code = to_jq_code(code)
+    d = _to_date_str(end_date)
+    df = fetch_with_retry(
+        "日线K线", jq.get_price, jq_code, end_date=d, count=count,
+        frequency="daily",
+        fields=["open", "close", "high", "low", "volume", "money"],
+        skip_paused=True, fq="pre", panel=False,
+    )
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.copy()
+    if "code" in df.columns:
+        df = df.drop(columns=["code"])
+    for col in ["open", "close", "high", "low", "volume", "money"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # 合并换手率（筹码分布需要）；失败则置 NaN，不影响其它指标
+    try:
+        val = fetch_with_retry(
+            "换手率序列", jq.get_valuation, jq_code, end_date=d, count=count,
+            fields=["turnover_ratio"],
+        )
+        if val is not None and not val.empty:
+            tr = pd.to_numeric(val["turnover_ratio"], errors="coerce")
+            tr.index = pd.to_datetime(val["day"]) if "day" in val.columns else df.index[:len(tr)]
+            df["turnover"] = tr.reindex(pd.to_datetime(df.index)).to_numpy() \
+                if not isinstance(df.index, pd.DatetimeIndex) else tr.reindex(df.index)
+    except Exception:
+        df["turnover"] = float("nan")
+    if "turnover" not in df.columns:
+        df["turnover"] = float("nan")
+    return df
+
+
+# 基本面：营收同比、毛利率（来自 indicator 表），净利润、经营性现金流。
+def get_fundamentals_history(codes, statdates) -> dict:
+    """取一批股票多个财报季的基本面指标。
+
+    :param statdates: 形如 ['2024q4','2025q1'] 的列表（按时间升序）。
+    :return: {6位代码: {"rev_yoy":[...], "margin":[...],
+                        "net_profit": 最新, "op_cash_flow": 最新}}（按季升序）。
+    """
+    ensure_auth()
+    from jqdatasdk import query, indicator, income, cash_flow
+    jq_codes = [to_jq_code(c) for c in codes]
+    acc = {from_jq_code(c): {"rev_yoy": [], "margin": [],
+                             "net_profit": None, "op_cash_flow": None}
+           for c in jq_codes}
+    for sd in statdates:
+        try:
+            q = query(
+                indicator.code, indicator.inc_revenue_year_on_year,
+                indicator.gross_profit_margin,
+                income.net_profit, cash_flow.net_operate_cash_flow,
+            ).filter(indicator.code.in_(jq_codes))
+            df = fetch_with_retry("基本面", jq.get_fundamentals, q, statDate=sd)
+        except Exception:
+            continue
+        if df is None or df.empty:
+            continue
+        df = df.set_index("code")
+        for jc in jq_codes:
+            code6 = from_jq_code(jc)
+            if jc not in df.index:
+                acc[code6]["rev_yoy"].append(None)
+                acc[code6]["margin"].append(None)
+                continue
+            row = df.loc[jc]
+            acc[code6]["rev_yoy"].append(_num(row.get("inc_revenue_year_on_year")))
+            acc[code6]["margin"].append(_num(row.get("gross_profit_margin")))
+            acc[code6]["net_profit"] = _num(row.get("net_profit"))
+            acc[code6]["op_cash_flow"] = _num(row.get("net_operate_cash_flow"))
+    return acc
+
+
+def _num(v):
+    try:
+        f = float(v)
+        return None if pd.isna(f) else f
+    except (TypeError, ValueError):
+        return None
+
+
+def get_locked_shares_window(codes, start_date=None, forward_days=30) -> dict:
+    """取未来一段时间内的解禁信息。
+
+    :return: {6位代码: {"rate": 占总股本比例(0~1), "days": 距最近解禁自然日数,
+                        "date": 解禁日}}；无解禁的股票不在返回里。
+    """
+    ensure_auth()
+    start = _to_date_str(start_date)
+    start_dt = pd.Timestamp(start)
+    end_dt = start_dt + pd.Timedelta(days=forward_days)
+    jq_codes = [to_jq_code(c) for c in codes]
+    out = {}
+    try:
+        df = fetch_with_retry(
+            "解禁数据", jq.get_locked_shares, jq_codes,
+            start_date=start, end_date=end_dt.strftime("%Y-%m-%d"),
+        )
+    except Exception as e:
+        print(f"  ⚠️  解禁数据获取失败（{e}），消息面按中性处理。")
+        return out
+    if df is None or df.empty:
+        return out
+    df = df.copy()
+    day_col = "day" if "day" in df.columns else ("date" if "date" in df.columns else None)
+    rate_col = "rate1" if "rate1" in df.columns else ("rate" if "rate" in df.columns else None)
+    code_col = "code" if "code" in df.columns else None
+    if not (day_col and code_col):
+        return out
+    df[day_col] = pd.to_datetime(df[day_col], errors="coerce")
+    for jc, g in df.groupby(code_col):
+        g = g.sort_values(day_col)
+        first = g.iloc[0]
+        rate = _num(first.get(rate_col)) if rate_col else None
+        # rate1 为百分比(占总股本%)；统一成 0~1 比例
+        rate = (rate / 100.0) if (rate is not None and rate > 1.5) else (rate or 0.0)
+        days = int((first[day_col] - start_dt).days)
+        out[from_jq_code(jc)] = {"rate": float(rate), "days": days,
+                                 "date": first[day_col].strftime("%Y-%m-%d")}
+    return out
+
+
+def get_index_closes(index_code, end_date=None, count=30) -> list:
+    """取指数收盘价序列（升序 list）。"""
+    ensure_auth()
+    d = _to_date_str(end_date)
+    df = fetch_with_retry(
+        "指数K线", jq.get_price, index_code, end_date=d, count=count,
+        frequency="daily", fields=["close"], panel=False,
+    )
+    if df is None or df.empty:
+        return []
+    return [float(x) for x in pd.to_numeric(df["close"], errors="coerce").dropna()]
+
+
+def get_northbound_netflow(end_date=None, count=5) -> list:
+    """取北向资金（沪股通+深股通）近 count 个交易日的净买入(亿元)序列（升序）。
+
+    依赖 finance.STK_ML_QUOTA（沪深港通额度/资金）。不同账号字段/权限可能不同，
+    取不到时返回 []（上层按中性 0.5 处理，不影响运行）。
+    """
+    ensure_auth()
+    try:
+        from jqdatasdk import finance, query
+    except Exception:
+        return []
+    d = _to_date_str(end_date)
+    # 北向 link_id：沪股通 310001、深股通 310002
+    try:
+        q = (query(finance.STK_ML_QUOTA.day, finance.STK_ML_QUOTA.link_id,
+                   finance.STK_ML_QUOTA.buy_amount, finance.STK_ML_QUOTA.sell_amount)
+             .filter(finance.STK_ML_QUOTA.link_id.in_(["310001", "310002"]),
+                     finance.STK_ML_QUOTA.day <= d)
+             .order_by(finance.STK_ML_QUOTA.day.desc())
+             .limit(count * 2))
+        df = fetch_with_retry("北向资金", finance.run_query, q)
+    except Exception as e:
+        print(f"  ⚠️  北向资金获取失败（{e}），按中性处理。")
+        return []
+    if df is None or df.empty:
+        return []
+    df = df.copy()
+    df["buy_amount"] = pd.to_numeric(df["buy_amount"], errors="coerce").fillna(0.0)
+    df["sell_amount"] = pd.to_numeric(df["sell_amount"], errors="coerce").fillna(0.0)
+    df["net"] = (df["buy_amount"] - df["sell_amount"]) / 1e8   # 元 → 亿元
+    daily = df.groupby("day")["net"].sum().sort_index()
+    return [float(x) for x in daily.iloc[-count:]]
+
+
+def get_industry_of(code, date=None) -> str:
+    """取个股所属申万一级行业名称（取不到返回空串）。"""
+    ensure_auth()
+    try:
+        info = jq.get_industry(to_jq_code(code), date=_to_date_str(date))
+        d = info.get(to_jq_code(code), {})
+        sw = d.get("sw_l1") or d.get("jq_l1") or {}
+        return sw.get("industry_name", "")
+    except Exception:
+        return ""

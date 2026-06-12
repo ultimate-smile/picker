@@ -1,0 +1,7 @@
+# 聚宽（jqdatasdk）版多维度选股所需依赖
+# 安装：pip install -r requirements.txt
+jqdatasdk>=1.9          # 聚宽数据 SDK（取数：K线/估值/资金流/财务/解禁/指数/北向）
+pandas>=1.3             # 数据处理
+numpy>=1.21             # 指标计算（均线/MACD/筹码分布等）
+anthropic>=0.30         # 可选：--analyze 调用 Claude 生成操作报告（不配置则用本地规则化报告）
+akshare>=1.12           # AKShare 版数据源（stock_picker.py 的网络/重试工具被 jq_data 复用）
