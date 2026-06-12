@@ -53,14 +53,14 @@ JQ_PASSWORD = "你的聚宽密码"
 ```bash
 python3 jq_main.py              # ⭐默认=多维度综合评估，直接给出买卖价位 + 持有建议
 python3 jq_main.py --selftest   # 登录聚宽 + 检查额度/连通性/各数据接口权限
-python3 jq_main.py --select     # 仅快速打印候选表（资金面+可操作性，不含买卖价位/持有建议）
+python3 jq_main.py --select     # 候选表 + 对这些候选给出买卖价位/持有建议（不做全市场五维重排）
 python3 jq_main.py --deep       # 同默认：多维度综合评估选股 + 买卖价位 + 持有建议
 python3 jq_main.py --analyze    # 选股 + Claude 深度分析
 python3 jq_main.py --paper      # 选股 + 本地模拟盘日内交易（推荐，安全）
 python3 jq_main.py --paper --demo  # 用最新价做一次性演示（非交易时段也能跑）
 
 # 自定义股票池（可与上面任一动作组合）
-python3 jq_main.py --select --codes 600000,000001,300750
+python3 jq_main.py --select --codes 600000,000001,300750   # 候选表 + 买卖价位/持有建议
 python3 jq_main.py --select --watchlist my_list.txt   # 文件内换行/逗号/空格分隔，# 为注释
 ```
 

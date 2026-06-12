@@ -292,7 +292,7 @@ class TestMainDispatch(unittest.TestCase):
             jm.main(["--codes", "600000"])
         deep.assert_called_once()
 
-    def test_select_flag_runs_select_only(self):
+    def test_select_flag_runs_select(self):
         with mock.patch.object(jm, "cmd_deep") as deep, \
              mock.patch.object(jm, "cmd_select") as select:
             jm.main(["--select"])
@@ -303,6 +303,29 @@ class TestMainDispatch(unittest.TestCase):
         with mock.patch.object(jm, "cmd_deep") as deep:
             jm.main(["--deep"])
         deep.assert_called_once()
+
+    def test_select_command_emits_trade_plan(self):
+        """--select 在打印候选表后，应对候选做五维评估并输出操作报告。"""
+        cands = [{"代码": "600498", "jq代码": "600498.XSHG", "名称": "烽火通信",
+                  "板块": "主板(沪)"}]
+        import jq_deep
+        with mock.patch.object(jm.sel, "select_candidates", return_value=cands), \
+             mock.patch.object(jm.sel, "print_candidates"), \
+             mock.patch.object(jq_deep, "evaluate_candidates",
+                               return_value=cands) as ev, \
+             mock.patch.object(jq_deep, "format_report",
+                               return_value="REPORT_OK") as fr:
+            out = jm.cmd_select(codes=["600498"])
+        ev.assert_called_once()
+        fr.assert_called_once()
+        self.assertEqual(out, cands)
+
+    def test_paper_uses_quick_select_no_plan(self):
+        """--paper 走轻量选股，不触发五维评估报告。"""
+        import jq_deep
+        with mock.patch.object(jm, "_quick_select", return_value=[]) as qs:
+            jm.cmd_paper(demo=True, codes=None)
+        qs.assert_called_once()
 
 
 class TestAnalystReport(unittest.TestCase):
