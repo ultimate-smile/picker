@@ -74,8 +74,8 @@ RUN_AFTER_CLOSE = True   # True=收盘后运行，False=开盘前运行
 # 在 https://www.joinquant.com/ 注册后获得账号（手机号）与密码。
 # jqdatasdk 免费额度有限（每日若干万~千万条），请合理使用。
 # 也可用环境变量 JQ_USERNAME / JQ_PASSWORD 覆盖下面的值（更安全）。
-JQ_USERNAME = ""   # 聚宽账号（注册手机号）
-JQ_PASSWORD = ""   # 聚宽密码
+JQ_USERNAME = "15167130481"   # 聚宽账号（注册手机号）
+JQ_PASSWORD = "241232@Uyun"   # 聚宽密码
 
 # ── 选股参数（基于聚宽数据）──
 # 选股票池：None=全 A 股；或填指数代码只在成分股里选，如沪深300 "000300.XSHG"
