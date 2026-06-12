@@ -276,6 +276,35 @@ class TestCliCodes(unittest.TestCase):
         self.assertEqual(codes, ["600000", "000001", "300750", "688981"])
 
 
+class TestMainDispatch(unittest.TestCase):
+    """主入口动作分发：默认（无参数/仅自定义池）= 多维度综合评估(--deep)。"""
+
+    def test_default_runs_deep(self):
+        with mock.patch.object(jm, "cmd_deep") as deep, \
+             mock.patch.object(jm, "cmd_select") as select:
+            rc = jm.main([])
+        deep.assert_called_once()
+        select.assert_not_called()
+        self.assertEqual(rc, 0)
+
+    def test_codes_only_runs_deep(self):
+        with mock.patch.object(jm, "cmd_deep") as deep:
+            jm.main(["--codes", "600000"])
+        deep.assert_called_once()
+
+    def test_select_flag_runs_select_only(self):
+        with mock.patch.object(jm, "cmd_deep") as deep, \
+             mock.patch.object(jm, "cmd_select") as select:
+            jm.main(["--select"])
+        select.assert_called_once()
+        deep.assert_not_called()
+
+    def test_deep_flag_runs_deep(self):
+        with mock.patch.object(jm, "cmd_deep") as deep:
+            jm.main(["--deep"])
+        deep.assert_called_once()
+
+
 class TestAnalystReport(unittest.TestCase):
     """操作报告：Claude 推送 + 不可用时本地规则化降级"""
 

@@ -2,9 +2,10 @@
 聚宽版 自动化选股 + 盘中交易 主入口
 ====================================
 用法：
+    python3 jq_main.py                # 默认=多维度综合评估，直接给出买卖价位 + 持有建议
     python3 jq_main.py --selftest     # 登录聚宽并检查额度/接口连通性
-    python3 jq_main.py --select       # 仅选股并打印候选
-    python3 jq_main.py --deep         # 多维度综合评估选股 + 买卖价位 + 持有建议（推荐）
+    python3 jq_main.py --select       # 仅快速打印候选表（不含买卖价位/持有建议）
+    python3 jq_main.py --deep         # 同默认：多维度综合评估选股 + 买卖价位 + 持有建议
     python3 jq_main.py --analyze      # 选股 + Claude 深度分析（需配置 ANTHROPIC_API_KEY）
     python3 jq_main.py --paper        # 选股 + 本地模拟盘日内交易（安全，推荐）
     python3 jq_main.py --paper --demo # 同上，但用历史价做一次性演示（非交易时段也可跑）
@@ -235,17 +236,18 @@ def main(argv=None):
         if "--selftest" in args or "--diagnose" in args:
             ok = cmd_selftest()
             return 0 if ok else 1
-        if "--deep" in args:
-            cmd_deep(codes=codes)
-            return 0
         if "--analyze" in args:
             cmd_analyze(codes=codes)
             return 0
         if "--paper" in args:
             cmd_paper(demo="--demo" in args, codes=codes)
             return 0
-        if "--select" in args or not has_action:
+        if "--select" in args:
             cmd_select(codes=codes)
+            return 0
+        # 默认（不带动作参数）或 --deep：多维度综合评估 + 买卖价位 + 持有建议
+        if "--deep" in args or not has_action:
+            cmd_deep(codes=codes)
             return 0
     except RuntimeError as e:
         print(f"\n❌ {e}")
