@@ -44,6 +44,36 @@ class TestCodeConversion(unittest.TestCase):
         self.assertEqual(jd.get_board("430047"), "北交所")
 
 
+class TestSnapshotDate(unittest.TestCase):
+    """数据基准日：盘中/盘前自动回退到上一交易日（用完整数据）。"""
+
+    def _days(self):
+        from datetime import date
+        return [date(2026, 6, 8), date(2026, 6, 9), date(2026, 6, 10),
+                date(2026, 6, 11), date(2026, 6, 12)]
+
+    def test_intraday_uses_prev_trade_day(self):
+        # 6/12 是交易日，但现在是 09:50（未收盘）→ 用 6/11
+        now = datetime(2026, 6, 12, 9, 50)
+        d = jd.resolve_snapshot_date(now, self._days(), close_hhmm=(15, 5))
+        self.assertEqual(d, datetime(2026, 6, 11).date())
+
+    def test_after_close_uses_today(self):
+        now = datetime(2026, 6, 12, 16, 0)
+        d = jd.resolve_snapshot_date(now, self._days(), close_hhmm=(15, 5))
+        self.assertEqual(d, datetime(2026, 6, 12).date())
+
+    def test_non_trading_day_uses_last(self):
+        # 6/13 是周六（不在交易日列表）→ 用最近交易日 6/12
+        now = datetime(2026, 6, 13, 10, 0)
+        d = jd.resolve_snapshot_date(now, self._days(), close_hhmm=(15, 5))
+        self.assertEqual(d, datetime(2026, 6, 12).date())
+
+    def test_empty_falls_back_to_today(self):
+        now = datetime(2026, 6, 12, 9, 50)
+        self.assertEqual(jd.resolve_snapshot_date(now, []), now.date())
+
+
 class TestConsecutiveInflow(unittest.TestCase):
     def test_counts_from_latest(self):
         self.assertEqual(jd.consecutive_inflow_days([1, -1, 2, 3, 4]), 3)

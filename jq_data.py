@@ -144,6 +144,53 @@ def _to_date_str(d=None) -> str:
     return str(d)
 
 
+def _as_date(x):
+    """把 date/datetime/Timestamp/np.datetime64/字符串 统一成 datetime.date。"""
+    if x is None:
+        return None
+    if isinstance(x, _date) and not isinstance(x, datetime):
+        return x
+    try:
+        return pd.Timestamp(x).date()
+    except Exception:
+        return None
+
+
+def resolve_snapshot_date(now=None, trade_days=None, close_hhmm=(15, 5)):
+    """选出“最近一个已收盘交易日”作为快照基准日（纯函数，便于离线测试）。
+
+    规则：取 ≤ 今天 的交易日里最后一个；若它就是今天但当前时间还没到收盘，
+    则回退到上一个交易日（这样盘前/盘中跑到的是上一交易日的完整数据）。
+
+    :param trade_days: 升序的交易日列表（date/Timestamp 均可）。
+    :return: datetime.date；无法判断时回退到 now 当天。
+    """
+    now = now or datetime.now()
+    today = now.date()
+    days = sorted(d for d in (_as_date(t) for t in (trade_days or [])) if d is not None)
+    past = [d for d in days if d <= today]
+    if not past:
+        return today
+    last = past[-1]
+    if last == today:
+        close_t = now.replace(hour=close_hhmm[0], minute=close_hhmm[1],
+                              second=0, microsecond=0)
+        if now < close_t:
+            return past[-2] if len(past) >= 2 else last
+    return last
+
+
+def get_recent_trade_days(end_date=None, count=10) -> list:
+    """取最近 count 个交易日（升序的 datetime.date 列表）。"""
+    ensure_auth()
+    end = end_date or datetime.now().date()
+    try:
+        days = jq.get_trade_days(end_date=_to_date_str(end), count=count)
+    except Exception:
+        return []
+    return [_as_date(d) for d in days if _as_date(d) is not None]
+
+
 def get_universe(date=None, index_code=None) -> pd.DataFrame:
     """
     获取候选股票池（聚宽代码为索引），并附带名称、上市日期。

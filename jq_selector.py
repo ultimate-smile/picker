@@ -58,6 +58,8 @@ JQ_MAX_CHANGE_PCT = _cfg_get("JQ_MAX_CHANGE_PCT", 7.0)
 JQ_SCORE_WEIGHTS = _cfg_get("JQ_SCORE_WEIGHTS",
                             {"inflow": 0.4, "consec": 0.2, "change": 0.2, "turnover": 0.2})
 JQ_CUSTOM_UNIVERSE = _cfg_get("JQ_CUSTOM_UNIVERSE", [])
+JQ_SNAPSHOT_USE_LAST_COMPLETE = _cfg_get("JQ_SNAPSHOT_USE_LAST_COMPLETE", True)
+JQ_MARKET_CLOSE_HHMM = _cfg_get("JQ_MARKET_CLOSE_HHMM", (15, 5))
 
 
 # ─────────────────────────────────────────
@@ -193,6 +195,55 @@ def _resolve_universe(d, codes):
     return uni, False
 
 
+def _resolve_snapshot_date(date):
+    """显式传入日期则用之；否则按配置自动选用最近已收盘交易日（盘中用上一交易日完整数据）。"""
+    if date is not None:
+        return date
+    if not JQ_SNAPSHOT_USE_LAST_COMPLETE:
+        return datetime.now().date()
+    try:
+        tdays = jd.get_recent_trade_days(count=10)
+        d = jd.resolve_snapshot_date(datetime.now(), tdays,
+                                     close_hhmm=tuple(JQ_MARKET_CLOSE_HHMM))
+        if d != datetime.now().date():
+            print(f"  ℹ️  数据基准日自动选用最近已收盘交易日：{d}"
+                  f"（盘中/盘前用完整数据；如需当日盘中数据请显式传入日期）")
+        return d
+    except Exception:
+        return datetime.now().date()
+
+
+def _diagnose_valuation(val, d):
+    """估值初筛后为 0 时，分项诊断到底是市值还是换手把候选滤光，并打印数值分布。"""
+    n = len(val)
+    cap = pd.to_numeric(val.get("market_cap"), errors="coerce")
+    tr = pd.to_numeric(val.get("turnover_ratio"), errors="coerce")
+    lo_c = JQ_MIN_MARKET_CAP if JQ_MIN_MARKET_CAP is not None else float("-inf")
+    hi_c = JQ_MAX_MARKET_CAP if JQ_MAX_MARKET_CAP is not None else float("inf")
+    lo_t = JQ_MIN_TURNOVER if JQ_MIN_TURNOVER is not None else float("-inf")
+    hi_t = JQ_MAX_TURNOVER if JQ_MAX_TURNOVER is not None else float("inf")
+    in_cap = int(((cap >= lo_c) & (cap <= hi_c)).sum())
+    in_tr = int(((tr >= lo_t) & (tr <= hi_t)).sum())
+
+    def _q(s):
+        s = s.dropna()
+        if s.empty:
+            return "—"
+        return f"{s.min():.2f}/{s.median():.2f}/{s.max():.2f}"
+
+    print(f"  ⚠️  估值初筛后为 0，分项诊断（数据日 {d}，共 {n} 只）：")
+    print(f"      市值落在 [{JQ_MIN_MARKET_CAP}, {JQ_MAX_MARKET_CAP}] 亿：{in_cap} 只"
+          f"｜市值(亿) 最小/中位/最大 = {_q(cap)}")
+    print(f"      换手落在 [{JQ_MIN_TURNOVER}, {JQ_MAX_TURNOVER}] %：{in_tr} 只"
+          f"｜换手(%) 最小/中位/最大 = {_q(tr)}")
+    if in_tr == 0 and tr.dropna().median() < (JQ_MIN_TURNOVER or 0):
+        print("      → 多数标的换手率低于下限。常见原因：在【早盘】运行，当日换手尚未累积；")
+        print("        建议收盘后运行、或让程序自动用上一交易日数据"
+              "（JQ_SNAPSHOT_USE_LAST_COMPLETE=True），或调低 JQ_MIN_TURNOVER。")
+    if in_cap == 0:
+        print("      → 没有标的市值落在区间，请检查 JQ_MIN/MAX_MARKET_CAP 是否过窄。")
+
+
 def select_candidates(date=None, top_n=None, codes=None) -> list:
     """
     主选股流程，返回候选股列表（按综合评分降序）。
@@ -203,7 +254,7 @@ def select_candidates(date=None, top_n=None, codes=None) -> list:
              主力净流入/连续净流入天数/综合评分/近N日主力流向。
     """
     top_n = top_n or JQ_FINAL_PICKS
-    d = date or datetime.now().date()
+    d = _resolve_snapshot_date(date)
 
     # 1) 股票池
     uni, _is_custom = _resolve_universe(d, codes)
@@ -228,7 +279,13 @@ def select_candidates(date=None, top_n=None, codes=None) -> list:
     print("📡 [聚宽] 拉取估值（市值/换手率）并初筛...")
     val = jd.get_valuation_oneday(code_list, date=d)
     if not val.empty:
-        code_list = [c for c in val.index if _passes_valuation(val.loc[c])]
+        kept = [c for c in val.index if _passes_valuation(val.loc[c])]
+        if not kept:
+            _diagnose_valuation(val, d)
+        code_list = kept
+    else:
+        print("  ⚠️  估值数据为空（可能：非交易日 / 额度耗尽 / 数据权限）。")
+        return []
     print(f"  市值/换手初筛后：{len(code_list)} 只")
     if not code_list:
         return []

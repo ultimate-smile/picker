@@ -111,6 +111,13 @@ JQ_CUSTOM_UNIVERSE = []
 #   "basic" = 只用 get_money_flow（账号已开通该数据时最精确）
 #   "auto"  = 先用 get_money_flow，不可用时自动降级到 get_money_flow_pro 并推导
 JQ_MONEY_FLOW_API = "pro"
+# 数据基准日：不显式传入日期时，自动选用“最近一个已收盘交易日”。
+#   True（默认）：盘中/盘前运行会用上一交易日的完整数据（换手/资金/涨跌幅才完整），
+#                避免早盘因当日换手率尚低被全部过滤、选不出票。
+#   False：始终用“今天”，需自行确保在收盘后运行。
+JQ_SNAPSHOT_USE_LAST_COMPLETE = True
+JQ_MARKET_CLOSE_HHMM = (15, 5)   # 视为“已收盘”的时间（北京时间，时,分）
+
 JQ_HIST_LOOKBACK_DAYS = 5    # 统计“连续主力净流入天数”回看的交易日数
 JQ_TOP_N = 20                # 参与综合评分的候选池大小（评分后只取 JQ_FINAL_PICKS 只）
 JQ_FINAL_PICKS = 3           # 最终选出的股票数量（select_candidates 默认返回的只数）
