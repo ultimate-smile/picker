@@ -2,9 +2,10 @@
 聚宽版 自动化选股 + 盘中交易 主入口
 ====================================
 用法：
+    python3 jq_main.py                # 默认=多维度综合评估，直接给出买卖价位 + 持有建议
     python3 jq_main.py --selftest     # 登录聚宽并检查额度/接口连通性
-    python3 jq_main.py --select       # 仅选股并打印候选
-    python3 jq_main.py --deep         # 多维度综合评估选股 + 买卖价位 + 持有建议（推荐）
+    python3 jq_main.py --select       # 候选表 + 对候选给出买卖价位/持有建议（不做全市场五维重排）
+    python3 jq_main.py --deep         # 同默认：多维度综合评估选股 + 买卖价位 + 持有建议
     python3 jq_main.py --analyze      # 选股 + Claude 深度分析（需配置 ANTHROPIC_API_KEY）
     python3 jq_main.py --paper        # 选股 + 本地模拟盘日内交易（安全，推荐）
     python3 jq_main.py --paper --demo # 同上，但用历史价做一次性演示（非交易时段也可跑）
@@ -166,9 +167,23 @@ def cmd_selftest() -> bool:
     return critical_ok
 
 
-def cmd_select(codes=None) -> list:
+def _quick_select(codes=None) -> list:
+    """仅选股并打印候选表（不做五维评估），供 --paper 等轻量流程复用。"""
     candidates = sel.select_candidates(codes=codes)
     sel.print_candidates(candidates)
+    return candidates
+
+
+def cmd_select(codes=None) -> list:
+    """选股 → 打印候选表 → 对这些候选补充买卖价位 + 持有建议（五维评估）。"""
+    candidates = _quick_select(codes=codes)
+    if candidates:
+        import jq_deep
+        picks = jq_deep.evaluate_candidates(candidates, final_picks=len(candidates))
+        if picks:
+            print("\n" + "=" * 50)
+            print(jq_deep.format_report(picks, final_picks=len(picks)))
+            print("=" * 50)
     return candidates
 
 
@@ -200,7 +215,7 @@ def cmd_analyze(codes=None) -> None:
 
 
 def cmd_paper(demo: bool = False, codes=None) -> None:
-    candidates = cmd_select(codes=codes)
+    candidates = _quick_select(codes=codes)
     if not candidates:
         print("无候选股，结束")
         return
@@ -235,17 +250,18 @@ def main(argv=None):
         if "--selftest" in args or "--diagnose" in args:
             ok = cmd_selftest()
             return 0 if ok else 1
-        if "--deep" in args:
-            cmd_deep(codes=codes)
-            return 0
         if "--analyze" in args:
             cmd_analyze(codes=codes)
             return 0
         if "--paper" in args:
             cmd_paper(demo="--demo" in args, codes=codes)
             return 0
-        if "--select" in args or not has_action:
+        if "--select" in args:
             cmd_select(codes=codes)
+            return 0
+        # 默认（不带动作参数）或 --deep：多维度综合评估 + 买卖价位 + 持有建议
+        if "--deep" in args or not has_action:
+            cmd_deep(codes=codes)
             return 0
     except RuntimeError as e:
         print(f"\n❌ {e}")

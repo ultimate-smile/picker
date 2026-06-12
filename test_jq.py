@@ -44,6 +44,36 @@ class TestCodeConversion(unittest.TestCase):
         self.assertEqual(jd.get_board("430047"), "北交所")
 
 
+class TestSnapshotDate(unittest.TestCase):
+    """数据基准日：盘中/盘前自动回退到上一交易日（用完整数据）。"""
+
+    def _days(self):
+        from datetime import date
+        return [date(2026, 6, 8), date(2026, 6, 9), date(2026, 6, 10),
+                date(2026, 6, 11), date(2026, 6, 12)]
+
+    def test_intraday_uses_prev_trade_day(self):
+        # 6/12 是交易日，但现在是 09:50（未收盘）→ 用 6/11
+        now = datetime(2026, 6, 12, 9, 50)
+        d = jd.resolve_snapshot_date(now, self._days(), close_hhmm=(15, 5))
+        self.assertEqual(d, datetime(2026, 6, 11).date())
+
+    def test_after_close_uses_today(self):
+        now = datetime(2026, 6, 12, 16, 0)
+        d = jd.resolve_snapshot_date(now, self._days(), close_hhmm=(15, 5))
+        self.assertEqual(d, datetime(2026, 6, 12).date())
+
+    def test_non_trading_day_uses_last(self):
+        # 6/13 是周六（不在交易日列表）→ 用最近交易日 6/12
+        now = datetime(2026, 6, 13, 10, 0)
+        d = jd.resolve_snapshot_date(now, self._days(), close_hhmm=(15, 5))
+        self.assertEqual(d, datetime(2026, 6, 12).date())
+
+    def test_empty_falls_back_to_today(self):
+        now = datetime(2026, 6, 12, 9, 50)
+        self.assertEqual(jd.resolve_snapshot_date(now, []), now.date())
+
+
 class TestConsecutiveInflow(unittest.TestCase):
     def test_counts_from_latest(self):
         self.assertEqual(jd.consecutive_inflow_days([1, -1, 2, 3, 4]), 3)
@@ -244,6 +274,58 @@ class TestCliCodes(unittest.TestCase):
         finally:
             os.remove(path)
         self.assertEqual(codes, ["600000", "000001", "300750", "688981"])
+
+
+class TestMainDispatch(unittest.TestCase):
+    """主入口动作分发：默认（无参数/仅自定义池）= 多维度综合评估(--deep)。"""
+
+    def test_default_runs_deep(self):
+        with mock.patch.object(jm, "cmd_deep") as deep, \
+             mock.patch.object(jm, "cmd_select") as select:
+            rc = jm.main([])
+        deep.assert_called_once()
+        select.assert_not_called()
+        self.assertEqual(rc, 0)
+
+    def test_codes_only_runs_deep(self):
+        with mock.patch.object(jm, "cmd_deep") as deep:
+            jm.main(["--codes", "600000"])
+        deep.assert_called_once()
+
+    def test_select_flag_runs_select(self):
+        with mock.patch.object(jm, "cmd_deep") as deep, \
+             mock.patch.object(jm, "cmd_select") as select:
+            jm.main(["--select"])
+        select.assert_called_once()
+        deep.assert_not_called()
+
+    def test_deep_flag_runs_deep(self):
+        with mock.patch.object(jm, "cmd_deep") as deep:
+            jm.main(["--deep"])
+        deep.assert_called_once()
+
+    def test_select_command_emits_trade_plan(self):
+        """--select 在打印候选表后，应对候选做五维评估并输出操作报告。"""
+        cands = [{"代码": "600498", "jq代码": "600498.XSHG", "名称": "烽火通信",
+                  "板块": "主板(沪)"}]
+        import jq_deep
+        with mock.patch.object(jm.sel, "select_candidates", return_value=cands), \
+             mock.patch.object(jm.sel, "print_candidates"), \
+             mock.patch.object(jq_deep, "evaluate_candidates",
+                               return_value=cands) as ev, \
+             mock.patch.object(jq_deep, "format_report",
+                               return_value="REPORT_OK") as fr:
+            out = jm.cmd_select(codes=["600498"])
+        ev.assert_called_once()
+        fr.assert_called_once()
+        self.assertEqual(out, cands)
+
+    def test_paper_uses_quick_select_no_plan(self):
+        """--paper 走轻量选股，不触发五维评估报告。"""
+        import jq_deep
+        with mock.patch.object(jm, "_quick_select", return_value=[]) as qs:
+            jm.cmd_paper(demo=True, codes=None)
+        qs.assert_called_once()
 
 
 class TestAnalystReport(unittest.TestCase):

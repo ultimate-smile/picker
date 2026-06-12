@@ -188,19 +188,16 @@ def _position_pct(dims):
 # 主流程
 # ═════════════════════════════════════════════════════════════════
 
-def select_deep(date=None, codes=None, pool_size=None, final_picks=None):
-    """多维度综合选股主流程，返回精选列表（按综合分降序）。"""
-    pool_size = pool_size or DEEP_POOL_SIZE
-    final_picks = final_picks or DEEP_FINAL_PICKS
-    ref = date or datetime.now().date()
+def evaluate_candidates(pool, ref_date=None, final_picks=None, sort=True):
+    """对已选出的候选池逐只做五维评估，并附上操作计划。返回精选列表。
 
-    print("📡 [深度] 资金面+可操作性初筛候选池...")
-    pool = sel.select_candidates(date=date, top_n=pool_size, codes=codes)
+    与 select_deep 的区别：本函数**不再重新选股**，而是对传入的 pool 直接评分，
+    便于 --select 等流程在已有候选上补充“买卖价位 + 持有建议”。
+    """
     if not pool:
-        print("  无候选池（资金面初筛为空）。")
         return []
-    print(f"  候选池 {len(pool)} 只，开始五维评估...")
-
+    final_picks = final_picks or DEEP_FINAL_PICKS
+    ref = ref_date or datetime.now().date()
     pool_codes = [c["jq代码"] for c in pool]
 
     # 预取批量数据，减少请求
@@ -258,12 +255,28 @@ def select_deep(date=None, codes=None, pool_size=None, final_picks=None):
               f" 基 {dims['fundamental']:.2f} 筹 {dims['chips']:.2f}"
               f" 市 {dims['market']:.2f} 息 {dims['catalyst']:.2f}")
 
-    results.sort(key=lambda r: r["综合评分"], reverse=True)
+    if sort:
+        results.sort(key=lambda r: r["综合评分"], reverse=True)
     if DEEP_MIN_SCORE > 0:
         results = [r for r in results if r["综合评分"] >= DEEP_MIN_SCORE]
     picks = results[:final_picks]
     print(f"✅ 五维评估完成，精选 {len(picks)} 只。")
     return picks
+
+
+def select_deep(date=None, codes=None, pool_size=None, final_picks=None):
+    """多维度综合选股主流程：资金面初筛候选池 → 五维评估 → 精选（按综合分降序）。"""
+    pool_size = pool_size or DEEP_POOL_SIZE
+    final_picks = final_picks or DEEP_FINAL_PICKS
+    ref = sel._resolve_snapshot_date(date)
+
+    print("📡 [深度] 资金面+可操作性初筛候选池...")
+    pool = sel.select_candidates(date=date, top_n=pool_size, codes=codes)
+    if not pool:
+        print("  无候选池（资金面初筛为空）。")
+        return []
+    print(f"  候选池 {len(pool)} 只，开始五维评估...")
+    return evaluate_candidates(pool, ref_date=ref, final_picks=final_picks)
 
 
 def format_report(picks, final_picks=None):
