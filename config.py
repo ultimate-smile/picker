@@ -40,6 +40,8 @@ FINAL_PICKS = 3
 # 可选值："主板(沪)"、"主板(深)"、"创业板"、"科创板"、"北交所"
 # 示例：只看科创板+创业板 → ["科创板", "创业板"]
 # 全部板块 → []
+# 说明：此项原仅作用于 AKShare 版（stock_picker.py）。现在聚宽版（jq_*）也会读取它
+#       （见下方 JQ_INCLUDE_BOARDS），所以这里设置 ["科创板"] 在 jq_main.py 同样生效。
 INCLUDE_BOARDS = []   # 默认全部板块
 
 
@@ -161,6 +163,16 @@ JQ_EXCLUDE_ST = True         # 排除 ST/*ST
 JQ_EXCLUDE_KCB = False       # 排除科创板（68 开头）
 JQ_EXCLUDE_BJ = False         # 排除北交所（4/8 开头）
 JQ_EXCLUDE_NEW_DAYS = 60     # 排除上市不足 N 个自然日的次新股
+# 只在指定板块里选股（白名单）。留空 [] = 不限板块。
+# 可选值："主板(沪)"、"主板(深)"、"创业板"、"科创板"、"北交所"。
+# 留空时会自动回退读取上面的 INCLUDE_BOARDS，使其在聚宽版同样生效。
+JQ_INCLUDE_BOARDS = []
+# 指定个股时是否跳过资金面/可操作性筛选，直接给出操作与持有/走势建议：
+#   True（默认）：用 --codes / --watchlist / JQ_CUSTOM_UNIVERSE 明确指定股票时，
+#     即使它们不满足主力净占比/涨跌幅/换手等筛选因子，也照常做五维评估、
+#     给出买卖价位 + 持有建议 + 未来走势预测（“我点名的票就要给我建议”）。
+#   False：指定个股仍需通过全部筛选因子，未通过则不评估。
+JQ_CODES_BYPASS_SCREEN = True
 
 # ── 盘中交易参数 ──
 # 交易模式：

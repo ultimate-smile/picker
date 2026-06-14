@@ -72,7 +72,7 @@ python3 jq_main.py --select --watchlist my_list.txt   # 文件内换行/逗号/�
 0. **大盘走势（市场环境）门控**（`JQ_USE_MARKET_REGIME`）：先看基准指数（默认上证）趋势——
    走强维持正常阈值；**走弱则自动收紧**（上浮主力净占比下限 `JQ_WEAK_MARKET_MIN_NET_BOOST`、
    缩减最终选股数 `JQ_WEAK_MARKET_PICK_FACTOR`），规避逆势抄底；取数失败按中性处理；
-1. **股票池**：全 A 股 / 指定指数成分股 / **自定义集合**（`--codes` / `--watchlist` / `JQ_CUSTOM_UNIVERSE`）→ 剔除 ST / 次新 / 指定板块；
+1. **股票池**：全 A 股 / 指定指数成分股 / **自定义集合**（`--codes` / `--watchlist` / `JQ_CUSTOM_UNIVERSE`）→ 剔除 ST / 次新 / 指定板块；可用 `JQ_INCLUDE_BOARDS`（或回退读取 `INCLUDE_BOARDS`）设**板块白名单**，如只看科创板；
 2. **估值初筛**（`get_valuation`）：市值区间 + 换手率**上下限**（过滤流动性差与过热）；
 3. **主力资金流向**：主力净占比落在 `[下限, 上限]` 区间（上限剔除涨停式异常爆量）；
 4. **可操作性过滤**（`get_price`）：剔除 **涨停 / 接近涨停（封板买不进）/ 跌停 / 停牌**，并限制当日涨跌幅在合理区间（默认 -5%~+9%，不追高、不抄弱势）；
@@ -82,6 +82,11 @@ python3 jq_main.py --select --watchlist my_list.txt   # 文件内换行/逗号/�
 
 > 这样**筛选阶段就同时考虑了个股历史走势与大盘走势**，而不只是当日资金面：弱市少出手、
 > 下行趋势的票不入选，把资金面与趋势/大盘联合判断。
+
+> **指定个股直评**：当你用 `--codes` / `--watchlist` / `JQ_CUSTOM_UNIVERSE` **点名股票**时，
+> 默认（`JQ_CODES_BYPASS_SCREEN=True`）会**跳过上述全部筛选因子**，对这些票直接做五维评估，
+> 给出**买入区间 / 止损 / 目标价 / 持有建议 / 未来走势预测**——“我指定的票就要给我建议”，
+> 不会因不满足筛选条件而被剔除。设为 `False` 则指定个股仍需通过筛选。
 
 > 相关参数全部在 `config.py` 可调：`JQ_MIN/MAX_NET_PCT_MAIN`、`JQ_MIN/MAX_TURNOVER`、
 > `JQ_EXCLUDE_NEAR_LIMIT`、`JQ_NEAR_LIMIT_BUFFER`、`JQ_MIN/MAX_CHANGE_PCT`、`JQ_SCORE_WEIGHTS`、`JQ_CUSTOM_UNIVERSE`、
@@ -116,6 +121,7 @@ python3 jq_main.py --deep --codes 600498,688981 # 只评估指定自选股
 - **止损位**：关键支撑下方一个缓冲，且不超过最大风险上限 `JQ_STOP_MAX_PCT`（控制单笔亏损）；
 - **目标价 1/2**：压力位 / 前高或测幅（关键价位是止盈止损的核心依据）；
 - **持有建议**：*技术面定时机、基本面定持有*——站上 20 日线则持有、跌破 20 日线警戒、跌破 60 日线趋势走坏离场；基本面扎实可中线持有并容忍回调，基本面弱则按短线严格止损；
+- **未来走势预测**：综合技术面 + 大盘给出短中期方向（偏多 / 震荡偏多 / 震荡 / 偏弱 / 偏空）及依据（多头排列 / MACD 金叉 / 站上 20 线 / 大盘强弱 / 量价背离），并标注上行压力位、下方支撑与“确认/失效”关键价位（规则推演，非预测保证）；
 - **仓位**：综合分越高仓位越高（上限 `PER_POSITION_PCT`），有重大解禁等利空自动压缩。
 
 **输出示例：**
@@ -271,7 +277,9 @@ bash run.sh
 |------|--------|------|
 | `MIN_MAIN_FORCE_RATIO` | 5.0 | 主力净占比门槛，调高=候选更少但更强 |
 | `TOP_N_CANDIDATES` | 20 | 发给Claude分析的候选数量 |
-| `INCLUDE_BOARDS` | [] | 指定板块，如 `["科创板","创业板"]` |
+| `INCLUDE_BOARDS` | [] | 指定板块白名单，如 `["科创板","创业板"]`；现在**聚宽版（jq_*）也生效**（jq_selector 会回退读取它，亦可用 `JQ_INCLUDE_BOARDS` 覆盖） |
+| `JQ_INCLUDE_BOARDS` | [] | 聚宽版板块白名单（优先于 `INCLUDE_BOARDS`）；留空则不限板块 |
+| `JQ_CODES_BYPASS_SCREEN` | True | 用 `--codes`/`--watchlist`/`JQ_CUSTOM_UNIVERSE` 指定个股时**跳过筛选**，即使不满足因子也照常给买卖/持有/未来走势预测 |
 | `BYPASS_SYSTEM_PROXY` | True | 取行情数据时绕过系统代理（直连国内服务器），解决代理报错 |
 | `DATA_FETCH_RETRIES` | 3 | 数据请求失败时的最大重试次数 |
 | `DATA_FETCH_RETRY_DELAY` | 3.0 | 首次重试前等待秒数（之后指数退避） |

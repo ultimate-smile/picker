@@ -148,7 +148,68 @@ def trade_plan(close, levels, dims, detail):
                 reward_pct=round((t1 - close) / close * 100, 1))
     plan["hold"] = _holding_advice(dims, detail)
     plan["position_pct"] = _position_pct(dims)
+    plan["forecast"] = _trend_forecast(close, sup, res, dims, detail)
     return plan
+
+
+def _trend_forecast(close, support, resistance, dims, detail):
+    """规则化“未来走势预测”：综合技术面 + 大盘，给出短中期方向与关键确认/失效位。
+
+    仅为基于当前量价/趋势的推演，非未来保证。
+    """
+    tech = detail.get("technical", {})
+    ma = tech.get("ma") or {}
+    macd = tech.get("macd") or {}
+    vp = tech.get("volprice") or {}
+    below20 = bool(ma.get("below_ma20"))
+    below60 = bool(ma.get("below_ma60"))
+    bull = bool(ma.get("bull_align"))
+    golden = bool(macd.get("golden"))
+    death = bool(macd.get("death"))
+    diverg = bool(vp.get("divergence"))
+    t = float(dims.get("technical", 0.5))
+    m = float(dims.get("market", 0.5))
+    combined = 0.6 * t + 0.4 * m
+
+    if below60:
+        bias = "偏空：趋势已走坏（跌破 60 日线），反弹宜逢高减仓，等右侧企稳信号"
+    elif death or diverg:
+        bias = "短期偏弱/震荡回调：出现" + ("MACD 死叉" if death else "") \
+               + ("、" if (death and diverg) else "") + ("量价背离" if diverg else "") \
+               + "，先观望或减仓"
+    elif bull and golden and not below20 and combined >= 0.6:
+        bias = "偏多：均线多头排列 + MACD 金叉，趋势有望延续上行"
+    elif (not below20) and combined >= 0.55:
+        bias = "震荡偏多：站上 20 日线，回踩不破支撑可逢低介入"
+    elif below20:
+        bias = "震荡偏弱：已跌破 20 日线，等站回均线再确认"
+    else:
+        bias = "震荡：方向待选择，观望为主"
+
+    reasons = []
+    if bull:
+        reasons.append("均线多头")
+    if golden:
+        reasons.append("MACD金叉" + ("(零轴上)" if macd.get("above_zero") else ""))
+    if not below20:
+        reasons.append("站上20日线")
+    if m >= 0.6:
+        reasons.append("大盘走强")
+    elif m <= 0.4:
+        reasons.append("大盘偏弱")
+    if diverg:
+        reasons.append("⚠️量价背离")
+
+    parts = [bias]
+    if reasons:
+        parts.append("依据：" + "、".join(reasons))
+    if close and close > 0 and resistance and support:
+        up = (resistance - close) / close * 100
+        down = (close - support) / close * 100
+        parts.append(f"上行先看压力 {round(resistance, 2)}(约+{up:.1f}%)，"
+                     f"下方支撑 {round(support, 2)}(约-{down:.1f}%)；"
+                     f"放量站稳压力打开空间，有效跌破支撑则转弱")
+    return "；".join(parts) + "。"
 
 
 def _holding_advice(dims, detail):
@@ -275,6 +336,9 @@ def select_deep(date=None, codes=None, pool_size=None, final_picks=None):
     if not pool:
         print("  无候选池（资金面初筛为空）。")
         return []
+    # 指定个股直评模式：点名的票全部给建议，不截断到 DEEP_FINAL_PICKS
+    if any(c.get("指定个股") for c in pool):
+        final_picks = len(pool)
     print(f"  候选池 {len(pool)} 只，开始五维评估...")
     return evaluate_candidates(pool, ref_date=ref, final_picks=final_picks)
 
@@ -312,6 +376,8 @@ def format_report(picks, final_picks=None):
             out.append(f"  建议仓位：≤{plan['position_pct'] * 100:.0f}%"
                        f"（最多 {MAX_POSITIONS} 只）")
             out.append(f"  持有建议：{plan['hold']}")
+            if plan.get("forecast"):
+                out.append(f"  未来走势预测：{plan['forecast']}")
         else:
             out.append(f"  ⚠️  {plan.get('note', '无价位数据')}")
     out += ["",

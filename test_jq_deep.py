@@ -28,6 +28,9 @@ class TestTradePlan(unittest.TestCase):
         # 止损不超过最大风险（默认 8%）
         self.assertGreaterEqual(plan["stop"], 10.0 * (1 - dp.STOP_MAX_PCT) - 1e-6)
         self.assertIn("持有", plan["hold"])
+        # 含未来走势预测
+        self.assertTrue(plan.get("forecast"))
+        self.assertIsInstance(plan["forecast"], str)
 
     def test_no_price(self):
         plan = dp.trade_plan(0, self._levels(), {}, {})
@@ -70,6 +73,26 @@ class TestPositionPct(unittest.TestCase):
         self.assertLessEqual(dp._position_pct(full), dp.PER_POSITION_PCT + 1e-9)
 
 
+class TestTrendForecast(unittest.TestCase):
+    def test_bullish_forecast(self):
+        dims = {"technical": 0.85, "market": 0.8}
+        detail = {"technical": {"ma": {"below_ma20": False, "below_ma60": False,
+                                       "bull_align": True},
+                                "macd": {"golden": True, "above_zero": True},
+                                "volprice": {"divergence": False}}}
+        f = dp._trend_forecast(50.0, 47.5, 55.0, dims, detail)
+        self.assertIn("偏多", f)
+        self.assertIn("压力", f)
+
+    def test_bearish_forecast(self):
+        dims = {"technical": 0.2, "market": 0.3}
+        detail = {"technical": {"ma": {"below_ma20": True, "below_ma60": True,
+                                       "bull_align": False},
+                                "macd": {"death": True}, "volprice": {}}}
+        f = dp._trend_forecast(50.0, 47.5, 55.0, dims, detail)
+        self.assertIn("偏空", f)
+
+
 class TestFormatReport(unittest.TestCase):
     def _pick(self):
         return {
@@ -85,13 +108,14 @@ class TestFormatReport(unittest.TestCase):
             "操作计划": {"buy_low": 49.0, "buy_high": 50.5, "stop": 46.5,
                           "target1": 55.0, "target2": 60.0, "support": 47.5,
                           "resistance": 55.0, "risk_pct": 7.0, "reward_pct": 10.0,
-                          "position_pct": 0.25, "hold": "站上 20 日均线，趋势健康：持有。"},
+                          "position_pct": 0.25, "hold": "站上 20 日均线，趋势健康：持有。",
+                          "forecast": "震荡偏多：站上 20 日线。"},
         }
 
     def test_report_contains_key_sections(self):
         rep = dp.format_report([self._pick()])
         for kw in ["综合选股报告", "买入区间", "止损位", "目标价1", "持有建议",
-                   "688981", "MACD 金叉", "均线多头排列"]:
+                   "未来走势预测", "688981", "MACD 金叉", "均线多头排列"]:
             self.assertIn(kw, rep)
 
     def test_empty(self):

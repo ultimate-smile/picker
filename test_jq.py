@@ -543,6 +543,81 @@ class TestTrendAndRegime(unittest.TestCase):
         self.assertNotIn("000002", got)   # 净占比 6% 在走弱时被收紧剔除
 
 
+class TestIncludeBoards(unittest.TestCase):
+    """板块白名单：JQ_INCLUDE_BOARDS / INCLUDE_BOARDS 在聚宽版生效。"""
+
+    def test_filter_universe_include_boards(self):
+        uni = pd.DataFrame(
+            {"display_name": ["科创甲", "主板乙"], "name": ["A", "B"],
+             "start_date": ["2010-01-01", "2010-01-01"],
+             "end_date": ["2200-01-01", "2200-01-01"]},
+            index=["688981.XSHG", "600000.XSHG"],
+        )
+        out = jd.filter_universe(uni, exclude_st=True, exclude_new_days=0,
+                                 ref_date="2026-06-10", include_boards=["科创板"])
+        self.assertIn("688981.XSHG", out.index)
+        self.assertNotIn("600000.XSHG", out.index)   # 主板被白名单排除
+
+
+class TestCodesBypassScreen(unittest.TestCase):
+    """指定个股：跳过筛选，不满足因子也返回（交给五维评估给建议）。"""
+
+    def test_specified_codes_skip_filters(self):
+        codes = ["600000", "000002"]
+        # 资金面/涨跌幅都“不达标”：净占比 1%（<下限）、涨跌幅 -8%（越界）
+        val = pd.DataFrame({"market_cap": [100.0, 120.0],
+                            "turnover_ratio": [1.0, 1.0]},
+                           index=["600000.XSHG", "000002.XSHE"])
+        mf = pd.DataFrame({"net_pct_main": [1.0, -2.0],
+                           "net_amount_main": [100.0, -50.0]},
+                          index=["600000.XSHG", "000002.XSHE"])
+        px = pd.DataFrame(
+            {"change_pct": [-8.0, -8.0], "is_paused": [False] * 2,
+             "is_limit_up": [False] * 2, "near_limit_up": [False] * 2,
+             "is_limit_down": [False] * 2},
+            index=["600000.XSHG", "000002.XSHE"])
+        with mock.patch.object(sel.jd, "get_valuation_oneday", return_value=val), \
+             mock.patch.object(sel.jd, "get_money_flow_oneday", return_value=mf), \
+             mock.patch.object(sel.jd, "get_price_oneday", return_value=px), \
+             mock.patch.object(sel.jd, "get_money_flow_history", return_value={}), \
+             mock.patch.object(sel.jd, "get_daily_closes_batch", return_value={}), \
+             mock.patch.object(sel.jd, "get_security_name", side_effect=lambda c: "测试股"), \
+             mock.patch.object(sel, "JQ_CODES_BYPASS_SCREEN", True):
+            cands = sel.select_candidates(date="2026-06-10", codes=codes)
+        got = [c["代码"] for c in cands]
+        self.assertEqual(set(got), {"600000", "000002"})   # 两只都保留
+        self.assertTrue(all(c.get("指定个股") for c in cands))
+
+    def test_bypass_off_applies_filters(self):
+        """关闭旁路时，指定个股仍需通过筛选（不达标→空）。"""
+        codes = ["600000"]
+        uni = pd.DataFrame(
+            {"display_name": ["甲"], "name": ["A"],
+             "start_date": ["2010-01-01"], "end_date": ["2200-01-01"]},
+            index=["600000.XSHG"])
+        val = pd.DataFrame({"market_cap": [100.0], "turnover_ratio": [10.0]},
+                           index=["600000.XSHG"])
+        mf = pd.DataFrame({"net_pct_main": [1.0], "net_amount_main": [100.0]},
+                          index=["600000.XSHG"])   # 1% < 下限 → 被剔除
+        px = pd.DataFrame(
+            {"change_pct": [3.0], "is_paused": [False], "is_limit_up": [False],
+             "near_limit_up": [False], "is_limit_down": [False]},
+            index=["600000.XSHG"])
+        with mock.patch.object(sel.jd, "get_universe", return_value=uni), \
+             mock.patch.object(sel.jd, "filter_universe",
+                               side_effect=lambda df, **k: df), \
+             mock.patch.object(sel.jd, "get_valuation_oneday", return_value=val), \
+             mock.patch.object(sel.jd, "get_money_flow_oneday", return_value=mf), \
+             mock.patch.object(sel.jd, "get_price_oneday", return_value=px), \
+             mock.patch.object(sel.jd, "get_money_flow_history", return_value={}), \
+             mock.patch.object(sel.jd, "get_index_closes", return_value=[]), \
+             mock.patch.object(sel.jd, "get_daily_closes_batch", return_value={}), \
+             mock.patch.object(sel.jd, "get_security_name", side_effect=lambda c: "测试股"), \
+             mock.patch.object(sel, "JQ_CODES_BYPASS_SCREEN", False):
+            cands = sel.select_candidates(date="2026-06-10", codes=codes)
+        self.assertEqual(cands, [])   # 旁路关闭 + 不达标 → 无候选
+
+
 class TestMoneyFlowProFallback(unittest.TestCase):
     """get_money_flow_pro 兜底：由 inflow/outflow/netflow 推导主力净额/净占比"""
 

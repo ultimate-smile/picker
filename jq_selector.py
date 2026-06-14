@@ -51,6 +51,10 @@ JQ_EXCLUDE_ST = _cfg_get("JQ_EXCLUDE_ST", True)
 JQ_EXCLUDE_KCB = _cfg_get("JQ_EXCLUDE_KCB", False)
 JQ_EXCLUDE_BJ = _cfg_get("JQ_EXCLUDE_BJ", True)
 JQ_EXCLUDE_NEW_DAYS = _cfg_get("JQ_EXCLUDE_NEW_DAYS", 60)
+# 板块白名单：优先用 JQ_INCLUDE_BOARDS，留空则回退到通用 INCLUDE_BOARDS（让其在聚宽版也生效）
+JQ_INCLUDE_BOARDS = _cfg_get("JQ_INCLUDE_BOARDS", None) or _cfg_get("INCLUDE_BOARDS", []) or []
+# 指定个股时是否跳过筛选，直接评估并给操作/持有/走势建议
+JQ_CODES_BYPASS_SCREEN = _cfg_get("JQ_CODES_BYPASS_SCREEN", True)
 JQ_EXCLUDE_NEAR_LIMIT = _cfg_get("JQ_EXCLUDE_NEAR_LIMIT", True)
 JQ_NEAR_LIMIT_BUFFER = _cfg_get("JQ_NEAR_LIMIT_BUFFER", 0.015)
 JQ_MIN_CHANGE_PCT = _cfg_get("JQ_MIN_CHANGE_PCT", -3.0)
@@ -286,6 +290,72 @@ def _fetch_trend_scores(codes, date=None):
     return {code: _trend_score(closes) for code, closes in closes_map.items()}
 
 
+def build_codes_candidates(codes, date=None) -> list:
+    """为“明确指定的个股”构建候选（不做任何筛选过滤）。
+
+    用于 --codes / --watchlist / JQ_CUSTOM_UNIVERSE：即使这些票不满足资金面/
+    可操作性等筛选因子，也照常返回，交给五维评估给出操作/持有/走势建议。
+    资金面、换手、涨跌幅等字段尽力获取（取不到则为 None），不影响后续评估。
+    """
+    if not codes:
+        return []
+    d = _resolve_snapshot_date(date)
+    jq_codes, seen = [], set()
+    for c in codes:
+        jc = jd.to_jq_code(c)
+        if jc not in seen:
+            seen.add(jc)
+            jq_codes.append(jc)
+
+    def _try(fn, default):
+        try:
+            return fn()
+        except Exception as e:
+            print(f"  ⚠️  指定个股取数失败（{type(e).__name__}: {e}），按缺失处理。")
+            return default
+
+    val = _try(lambda: jd.get_valuation_oneday(jq_codes, date=d), pd.DataFrame())
+    mf = _try(lambda: jd.get_money_flow_oneday(jq_codes, date=d), pd.DataFrame())
+    px = _try(lambda: jd.get_price_oneday(jq_codes, date=d,
+                                          near_limit_buffer=JQ_NEAR_LIMIT_BUFFER),
+              pd.DataFrame())
+    hist = _try(lambda: jd.get_money_flow_history(jq_codes, end_date=d,
+                                                  count=JQ_HIST_LOOKBACK_DAYS), {})
+    trend_map = _fetch_trend_scores(jq_codes, date=d) if JQ_USE_TREND_IN_SELECT else {}
+
+    candidates = []
+    for code in jq_codes:
+        net_pct = _safe(mf, code, "net_pct_main")
+        net_amt = _safe(mf, code, "net_amount_main")
+        turnover = _safe(val, code, "turnover_ratio")
+        cap = _safe(val, code, "market_cap")
+        change_pct = _safe(px, code, "change_pct")
+        consec = jd.consecutive_inflow_days(hist.get(code, []))
+        trend = trend_map.get(code)
+        flows = hist.get(code, [])
+        candidates.append({
+            "代码": jd.from_jq_code(code),
+            "jq代码": code,
+            "名称": jd.get_security_name(code),
+            "板块": jd.get_board(code),
+            "总市值(亿)": round(float(cap), 1) if cap is not None else None,
+            "换手率(%)": round(float(turnover), 2) if turnover is not None else None,
+            "今日涨跌幅(%)": round(float(change_pct), 2) if change_pct is not None else None,
+            "今日主力净占比": round(float(net_pct), 2) if net_pct is not None else None,
+            "今日主力净流入(万)": round(float(net_amt), 1) if net_amt is not None else None,
+            "连续净流入天数": consec,
+            "历史走势分": round(float(trend), 3) if trend is not None else None,
+            "综合评分": None,   # 指定个股不参与筛选排序，综合分由五维评估给出
+            "近N日主力流向": "、".join(
+                f"{'+' if float(v) > 0 else ''}{round(float(v), 1)}"
+                for v in flows if v is not None and not pd.isna(v)
+            ),
+            "指定个股": True,
+        })
+    print(f"  指定个股直评：{len(candidates)} 只（跳过筛选，直接给操作/持有/走势建议）")
+    return candidates
+
+
 # ─────────────────────────────────────────
 # 主选股流程
 # ─────────────────────────────────────────
@@ -371,6 +441,13 @@ def select_candidates(date=None, top_n=None, codes=None) -> list:
     top_n = top_n or JQ_FINAL_PICKS
     d = _resolve_snapshot_date(date)
 
+    # 指定个股（--codes / --watchlist / JQ_CUSTOM_UNIVERSE）且允许跳过筛选时：
+    # 直接构建候选，不做资金面/可操作性/趋势/大盘等筛选，确保点名的票一定有建议。
+    custom = codes if codes is not None else (JQ_CUSTOM_UNIVERSE or None)
+    if custom and JQ_CODES_BYPASS_SCREEN:
+        print("📡 [聚宽] 指定个股模式：跳过筛选，直接评估并给操作/持有/走势建议...")
+        return build_codes_candidates(custom, date=d)
+
     # 0) 大盘走势：走弱时自动收紧（提高资金门槛、压缩最终选股数）
     regime = compute_market_regime(d)
     min_net_main = JQ_MIN_NET_PCT_MAIN
@@ -388,8 +465,11 @@ def select_candidates(date=None, top_n=None, codes=None) -> list:
     uni = jd.filter_universe(
         uni, exclude_st=JQ_EXCLUDE_ST, exclude_kcb=JQ_EXCLUDE_KCB,
         exclude_bj=JQ_EXCLUDE_BJ, exclude_new_days=JQ_EXCLUDE_NEW_DAYS, ref_date=d,
+        include_boards=JQ_INCLUDE_BOARDS,
     )
     code_list = list(uni.index)
+    if JQ_INCLUDE_BOARDS:
+        print(f"  板块白名单：{'、'.join(JQ_INCLUDE_BOARDS)}")
     print(f"  股票池规模：{len(code_list)} 只")
     if not code_list:
         return []
@@ -526,9 +606,13 @@ def print_candidates(candidates: list) -> None:
     for c in candidates:
         trend = c.get("历史走势分")
         trend_s = f"{trend:>7.2f}" if trend is not None else f"{'—':>7}"
+        score = c.get("综合评分")
+        score_s = f"{score:>8.3f}" if score is not None else f"{'—':>8}"
+        net = c.get("今日主力净占比")
+        net_s = f"{net:>9.2f}" if net is not None else f"{'—':>9}"
         print(f"{c['代码']:<8}{str(c['名称'])[:8]:<10}{c['板块']:<9}"
               f"{(c.get('今日涨跌幅(%)') or 0):>8.2f}"
-              f"{c['今日主力净占比']:>9.2f}{c['连续净流入天数']:>8}"
-              f"{(c.get('换手率(%)') or 0):>7.2f}{trend_s}{c['综合评分']:>8.3f}")
+              f"{net_s}{c['连续净流入天数']:>8}"
+              f"{(c.get('换手率(%)') or 0):>7.2f}{trend_s}{score_s}")
     print("─" * 92)
     print("⚠️  已剔除涨停/接近涨停/停牌；候选按综合评分排序，仅供参考，非投资建议。")

@@ -212,8 +212,12 @@ def get_universe(date=None, index_code=None) -> pd.DataFrame:
 
 
 def filter_universe(df: pd.DataFrame, *, exclude_st=True, exclude_kcb=False,
-                    exclude_bj=True, exclude_new_days=60, ref_date=None) -> pd.DataFrame:
-    """按板块/ST/次新等规则过滤股票池"""
+                    exclude_bj=True, exclude_new_days=60, ref_date=None,
+                    include_boards=None) -> pd.DataFrame:
+    """按板块/ST/次新等规则过滤股票池。
+
+    :param include_boards: 板块白名单（如 ["科创板"]）；非空时只保留这些板块。
+    """
     if df.empty:
         return df
     out = df.copy()
@@ -223,6 +227,9 @@ def filter_universe(df: pd.DataFrame, *, exclude_st=True, exclude_kcb=False,
         out = out[~out[name_col].astype(str).str.contains("ST|退", na=False)]
 
     boards = out.index.to_series().apply(get_board)
+    if include_boards:
+        out = out[boards.isin(list(include_boards))]
+        boards = boards[boards.isin(list(include_boards))]
     if exclude_kcb:
         out = out[boards != "科创板"]
     if exclude_bj:
