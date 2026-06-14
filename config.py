@@ -82,24 +82,60 @@ JQ_PASSWORD = "241232@Uyun"   # 聚宽密码
 JQ_UNIVERSE_INDEX = None
 JQ_MIN_NET_PCT_MAIN = 5.0    # 主力资金净占比下限（%），低于此值不入选
 # 主力净占比上限（%）：过滤异常爆量（多为涨停/拉升后的极端值）；None=不限
-JQ_MAX_NET_PCT_MAIN = 25.0
+# 调高到 40：25% 会把不少“强势启动”的票（资金大举建仓但未涨停）一并误杀，
+# 而涨停/接近涨停已由下方的可操作性过滤单独剔除，故上限放宽更合理。
+JQ_MAX_NET_PCT_MAIN = 40.0
 JQ_MIN_MARKET_CAP = 50.0     # 最小总市值（亿元）
-JQ_MAX_MARKET_CAP = 1000.0   # 最大总市值（亿元）；None=不限
+# 调高到 2000：覆盖更多优质中大盘（行业龙头多在 1000–2000 亿区间），
+# 同时仍由最小市值过滤掉流动性差的微盘股。
+JQ_MAX_MARKET_CAP = 2000.0   # 最大总市值（亿元）；None=不限
 JQ_MIN_TURNOVER = 2.0        # 最小换手率（%），过滤流动性差的票；None=不限
-JQ_MAX_TURNOVER = 30.0       # 最大换手率（%），过滤过热炒作；None=不限
+# 调高到 40：兼容“启动初期放量”的高换手（30% 会误杀刚启动的强势股），
+# 换手健康度评分同步把衰减区间拉到 40（见 jq_selector._turnover_score）。
+JQ_MAX_TURNOVER = 40.0       # 最大换手率（%），过滤过热炒作；None=不限
 
 # ── 可操作性过滤（避免选出买不进/追高的涨停板）──
 # 剔除涨停及“接近涨停”的股票（封板买不进、追高风险大）
 JQ_EXCLUDE_NEAR_LIMIT = True
-# 收盘价距涨停价 ≤ 该比例视为“接近涨停”，剔除（0.015 = 1.5%）
-JQ_NEAR_LIMIT_BUFFER = 0.015
-# 当日涨跌幅可接受区间（%）：默认 -3% ~ +7%，既不追高也不抄弱势；None=不限
-JQ_MIN_CHANGE_PCT = -3.0
-JQ_MAX_CHANGE_PCT = 7.0
+# 收盘价距涨停价 ≤ 该比例视为“接近涨停”，剔除（0.02 = 2%，更合理的安全边际）
+JQ_NEAR_LIMIT_BUFFER = 0.02
+# 当日涨跌幅可接受区间（%）：默认 -5% ~ +9%，
+# 下沿放到 -5 允许强势股的正常幅度回调（-3 会把洗盘回踩误杀），
+# 上沿放到 +9 不过早排除当日强势但尚未涨停的票；None=不限。
+JQ_MIN_CHANGE_PCT = -5.0
+JQ_MAX_CHANGE_PCT = 9.0
 
 # ── 综合评分权重（候选股按综合分排序，而非单看主力净占比）──
-# inflow=主力净占比, consec=连续净流入, change=涨跌幅健康度, turnover=换手健康度
-JQ_SCORE_WEIGHTS = {"inflow": 0.4, "consec": 0.2, "change": 0.2, "turnover": 0.2}
+# inflow=主力净占比, consec=连续净流入, change=涨跌幅健康度,
+# turnover=换手健康度, trend=个股历史走势健康度（均线结构/斜率，见 _trend_score）。
+# 新增 trend 维度：让“筛选阶段”也综合考虑历史走势，而不仅看当日资金面。
+JQ_SCORE_WEIGHTS = {"inflow": 0.35, "consec": 0.15, "change": 0.15,
+                    "turnover": 0.15, "trend": 0.20}
+
+# ── 历史走势（个股趋势）纳入筛选 ──
+# 打开后，候选池会拉取个股日线，用均线结构/斜率算“历史走势健康度”并计入综合分；
+# 取数失败（无权限/非交易日）时该项按中性处理，不影响其余筛选（稳健降级）。
+JQ_USE_TREND_IN_SELECT = True
+# 历史走势均线/斜率回看天数（与技术面 MA60 对齐，覆盖中期趋势）
+JQ_TREND_LOOKBACK = 60
+# 趋势否决：个股已明显跌破 60 日线（下行趋势）时，直接排除出候选池（不抄趋势走坏的票）。
+# 关闭则只降分不否决。
+JQ_TREND_VETO_BELOW_MA60 = True
+
+# ── 大盘走势（市场环境）纳入筛选 ──
+# 打开后，先判断大盘趋势（默认看上证指数站上/跌破 MA20 且斜率方向）：
+#   - 大盘走强：维持正常阈值；
+#   - 大盘走弱：自动收紧（提高主力净占比下限、压缩最终选股数量），规避逆势抄底。
+# 取数失败时按“中性”处理，不收紧也不放宽（稳健降级）。
+JQ_USE_MARKET_REGIME = True
+JQ_MARKET_REGIME_INDEX = "000001.XSHG"   # 判断大盘强弱的基准指数（上证综指）
+JQ_MARKET_REGIME_LOOKBACK = 20           # 大盘趋势回看天数（与 MA20 对齐）
+# 大盘走弱（趋势分 ≤ 该阈值，0~1）时触发收紧；index_trend_score 走弱约 0.45 及以下。
+JQ_WEAK_MARKET_SCORE = 0.45
+# 大盘走弱时，主力净占比下限上浮的绝对百分点（如 5% → 7%，只挑资金更强的票）
+JQ_WEAK_MARKET_MIN_NET_BOOST = 2.0
+# 大盘走弱时，最终候选数量的缩减系数（0.5=砍半，向下取整但至少留 1 只）
+JQ_WEAK_MARKET_PICK_FACTOR = 0.5
 
 # ── 自定义股票池 ──
 # 填 6 位或聚宽代码列表则只在该集合内选股（如自选股/行业池）；留空 [] 用全 A 股/指数。
@@ -134,9 +170,9 @@ TRADE_MODE = "paper"
 TRADE_CAPITAL = 100000.0     # 模拟盘初始资金（元）
 MAX_POSITIONS = 3            # 最大同时持仓只数
 PER_POSITION_PCT = 0.3       # 单只目标仓位占总资金比例（0.3=30%）
-TAKE_PROFIT_PCT = 0.08       # 止盈：浮盈达到 +8% 卖出
-STOP_LOSS_PCT = 0.04         # 止损：浮亏达到 -4% 卖出
-TRAIL_STOP_PCT = 0.03        # 移动止盈：从最高点回撤 3% 卖出（锁定利润）
+TAKE_PROFIT_PCT = 0.12       # 止盈：浮盈达到 +12% 卖出（留出趋势空间，不过早离场）
+STOP_LOSS_PCT = 0.05         # 止损：浮亏达到 -5% 卖出（配合更大止盈，提升盈亏比）
+TRAIL_STOP_PCT = 0.05        # 移动止盈：从最高点回撤 5% 卖出（减少日内噪音误触发）
 INTRADAY_POLL_SECONDS = 30   # 盘中轮询间隔（秒）
 FORCE_CLOSE_BEFORE_END = True  # 收盘前是否清仓（做 T/日内策略时建议 True）
 
@@ -154,8 +190,8 @@ FORCE_CLOSE_BEFORE_END = True  # 收盘前是否清仓（做 T/日内策略时�
 JQ_DIM_WEIGHTS = {
     "technical":   0.35,   # 技术面：均线/量价/MACD/关键价位
     "market":      0.25,   # 大盘与板块：指数趋势/北向/相对强弱
-    "fundamental": 0.20,   # 基本面：营收增速/毛利率/净利现金流
-    "chips":       0.10,   # 筹码结构：获利盘/成本区/集中度（近似）
+    "fundamental": 0.12,   # 基本面：营收增速/毛利率/净利现金流（短线交易中基本面滞后，权重下调）
+    "chips":       0.20,   # 筹码结构：获利盘/成本区/集中度（A 股筹码信号价值高，权重上调）
     "catalyst":    0.10,   # 消息面催化：解禁利空规避 + 自定义催化
 }
 
@@ -181,8 +217,8 @@ JQ_FUND_WEIGHTS = {
 JQ_FUND_QUARTERS = 5         # 回看的财报季数（用于判断营收增速是否“连续加速”）
 
 # ── 筹码结构（近似）参数 ──
-JQ_CHIP_LOOKBACK = 100       # 筹码成本分布回看的交易日数
-JQ_CHIP_DECAY = 0.94         # 历史筹码的衰减系数（越小越看重近期）
+JQ_CHIP_LOOKBACK = 150       # 筹码成本分布回看的交易日数（覆盖主力较完整的建仓周期）
+JQ_CHIP_DECAY = 0.91         # 历史筹码的衰减系数（越小越看重近期成交筹码）
 
 # ── 大盘与板块 ──
 JQ_MARKET_WEIGHTS = {

@@ -694,6 +694,44 @@ def get_index_closes(index_code, end_date=None, count=30) -> list:
     return [float(x) for x in pd.to_numeric(df["close"], errors="coerce").dropna()]
 
 
+def get_daily_closes_batch(codes, end_date=None, count=60) -> dict:
+    """批量取多只股票的日线收盘价序列（前复权，升序 list）。
+
+    用于“筛选阶段”计算个股历史走势（均线/斜率），避免逐只多次请求。
+    :return: {聚宽代码: [close...]}；取不到的股票不在返回里。任何异常都向上抛出，
+             由调用方决定是否降级（select_candidates 会整体 try/except 成中性）。
+    """
+    if not codes:
+        return {}
+    ensure_auth()
+    jq_codes = [to_jq_code(c) for c in codes]
+    d = _to_date_str(end_date)
+    df = fetch_with_retry(
+        "批量日线收盘", jq.get_price, jq_codes, end_date=d, count=count,
+        frequency="daily", fields=["close"], skip_paused=True, fq="pre",
+        panel=False,
+    )
+    out = {}
+    if df is None or len(df) == 0:
+        return out
+    df = df.copy()
+    if "code" not in df.columns:
+        # 单只股票时 get_price 可能不带 code 列
+        if len(jq_codes) == 1:
+            closes = pd.to_numeric(df["close"], errors="coerce").dropna()
+            if len(closes):
+                out[jq_codes[0]] = [float(x) for x in closes]
+        return out
+    sort_col = "time" if "time" in df.columns else ("day" if "day" in df.columns else None)
+    for jc, g in df.groupby("code"):
+        if sort_col is not None:
+            g = g.sort_values(sort_col)
+        closes = pd.to_numeric(g["close"], errors="coerce").dropna()
+        if len(closes):
+            out[jc] = [float(x) for x in closes]
+    return out
+
+
 def get_northbound_netflow(end_date=None, count=5) -> list:
     """取北向资金（沪股通+深股通）近 count 个交易日的净买入(亿元)序列（升序）。
 

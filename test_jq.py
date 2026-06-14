@@ -155,6 +155,8 @@ class TestSelector(unittest.TestCase):
              mock.patch.object(sel.jd, "get_money_flow_oneday", return_value=mf), \
              mock.patch.object(sel.jd, "get_price_oneday", return_value=px), \
              mock.patch.object(sel.jd, "get_money_flow_history", return_value=hist), \
+             mock.patch.object(sel.jd, "get_index_closes", return_value=[]), \
+             mock.patch.object(sel.jd, "get_daily_closes_batch", return_value={}), \
              mock.patch.object(sel.jd, "get_security_name", side_effect=lambda c: "测试股"), \
              mock.patch.object(sel, "JQ_MIN_NET_PCT_MAIN", 5.0), \
              mock.patch.object(sel, "JQ_MAX_NET_PCT_MAIN", 25.0), \
@@ -198,6 +200,8 @@ class TestSelector(unittest.TestCase):
              mock.patch.object(sel.jd, "get_money_flow_oneday", return_value=mf), \
              mock.patch.object(sel.jd, "get_price_oneday", return_value=px), \
              mock.patch.object(sel.jd, "get_money_flow_history", return_value={}), \
+             mock.patch.object(sel.jd, "get_index_closes", return_value=[]), \
+             mock.patch.object(sel.jd, "get_daily_closes_batch", return_value={}), \
              mock.patch.object(sel.jd, "get_security_name", side_effect=lambda c: "测试股"):
             cands = sel.select_candidates(date="2026-06-10")
         self.assertEqual(cands, [])  # 涨停被剔除，无候选
@@ -233,6 +237,8 @@ class TestSelector(unittest.TestCase):
              mock.patch.object(sel.jd, "get_money_flow_oneday", return_value=mf), \
              mock.patch.object(sel.jd, "get_price_oneday", return_value=px), \
              mock.patch.object(sel.jd, "get_money_flow_history", return_value={}), \
+             mock.patch.object(sel.jd, "get_index_closes", return_value=[]), \
+             mock.patch.object(sel.jd, "get_daily_closes_batch", return_value={}), \
              mock.patch.object(sel.jd, "get_security_name", side_effect=lambda c: "测试股"), \
              mock.patch.object(sel, "JQ_FINAL_PICKS", 3):
             cands = sel.select_candidates(date="2026-06-10")
@@ -244,6 +250,8 @@ class TestSelector(unittest.TestCase):
              mock.patch.object(sel.jd, "get_money_flow_oneday", return_value=mf), \
              mock.patch.object(sel.jd, "get_price_oneday", return_value=px), \
              mock.patch.object(sel.jd, "get_money_flow_history", return_value={}), \
+             mock.patch.object(sel.jd, "get_index_closes", return_value=[]), \
+             mock.patch.object(sel.jd, "get_daily_closes_batch", return_value={}), \
              mock.patch.object(sel.jd, "get_security_name", side_effect=lambda c: "测试股"):
             cands5 = sel.select_candidates(date="2026-06-10", top_n=5)
         self.assertEqual(len(cands5), 5)
@@ -387,13 +395,18 @@ class TestStrategyScoring(unittest.TestCase):
     def test_change_score_band(self):
         self.assertEqual(sel._change_score(3.0), 1.0)     # 温和上涨最佳
         self.assertEqual(sel._change_score(9.5), 0.0)     # 过热
-        self.assertEqual(sel._change_score(-5.0), 0.0)    # 大跌
+        self.assertEqual(sel._change_score(-5.0), 0.0)    # 大跌（下沿归零）
         self.assertGreater(sel._change_score(0.5), 0.0)
+        # 放宽下沿后：-4% 的正常回调仍保留分数（原来 -3 以下即归零）
+        self.assertGreater(sel._change_score(-4.0), 0.0)
 
     def test_turnover_score_band(self):
         self.assertEqual(sel._turnover_score(8.0), 1.0)
         self.assertLess(sel._turnover_score(1.0), 1.0)    # 流动性差
         self.assertLess(sel._turnover_score(25.0), 1.0)   # 过热
+        # 衰减区间拉到 40 后：35% 高换手仍 >0（原来 30 即归零）
+        self.assertGreater(sel._turnover_score(35.0), 0.0)
+        self.assertEqual(sel._turnover_score(40.0), 0.0)
 
     def test_inflow_and_consec_caps(self):
         self.assertEqual(sel._inflow_score(50.0), 1.0)    # 20% 封顶
@@ -413,6 +426,121 @@ class TestStrategyScoring(unittest.TestCase):
         self.assertFalse(sel.is_tradable(up))
         self.assertTrue(sel.is_tradable(ok))
         self.assertTrue(sel.is_tradable(up, exclude_near_limit=False))
+
+
+class TestTrendAndRegime(unittest.TestCase):
+    """历史走势（个股趋势）+ 大盘走势 纳入筛选"""
+
+    def test_trend_score_uptrend_high(self):
+        closes = [10 + i * 0.2 for i in range(70)]   # 持续上行、多头排列
+        self.assertGreater(sel._trend_score(closes), 0.7)
+
+    def test_trend_score_downtrend_low(self):
+        closes = [30 - i * 0.2 for i in range(70)]   # 持续下行、跌破 60 日线
+        self.assertLessEqual(sel._trend_score(closes), 0.2)
+
+    def test_trend_score_insufficient_neutral(self):
+        self.assertEqual(sel._trend_score([10, 11, 12]), 0.5)
+
+    def test_composite_uses_trend(self):
+        strong = sel.composite_score(10.0, 3, 4.0, 8.0, trend=1.0)
+        weak = sel.composite_score(10.0, 3, 4.0, 8.0, trend=0.0)
+        self.assertGreater(strong, weak)
+        # 不传 trend 时按中性处理，落在两者之间
+        neutral = sel.composite_score(10.0, 3, 4.0, 8.0)
+        self.assertGreater(neutral, weak)
+        self.assertLess(neutral, strong)
+
+    def test_market_regime_weak_and_strong(self):
+        down = [3000 - i * 8 for i in range(26)]
+        up = [3000 + i * 8 for i in range(26)]
+        with mock.patch.object(sel.jd, "get_index_closes", return_value=down):
+            r = sel.compute_market_regime(date="2026-06-10")
+        self.assertTrue(r["weak"])
+        with mock.patch.object(sel.jd, "get_index_closes", return_value=up):
+            r2 = sel.compute_market_regime(date="2026-06-10")
+        self.assertFalse(r2["weak"])
+
+    def test_market_regime_degrades_to_neutral(self):
+        # 取不到指数数据 → 中性，不收紧
+        with mock.patch.object(sel.jd, "get_index_closes", return_value=[]):
+            r = sel.compute_market_regime(date="2026-06-10")
+        self.assertFalse(r["weak"])
+        self.assertEqual(r["score"], 0.5)
+
+    def test_trend_veto_removes_downtrend(self):
+        """趋势否决：跌破 60 日线的下行趋势票应被剔除。"""
+        codes = ["600000.XSHG", "000002.XSHE"]
+        uni = pd.DataFrame(
+            {"display_name": ["甲", "乙"], "name": ["A", "B"],
+             "start_date": ["2010-01-01"] * 2, "end_date": ["2200-01-01"] * 2},
+            index=codes,
+        )
+        val = pd.DataFrame({"market_cap": [100.0, 120.0],
+                            "turnover_ratio": [10.0, 10.0]}, index=codes)
+        mf = pd.DataFrame({"net_pct_main": [12.0, 11.0],
+                           "net_amount_main": [5000.0, 4000.0]}, index=codes)
+        px = pd.DataFrame(
+            {"change_pct": [3.0, 3.0], "is_paused": [False] * 2,
+             "is_limit_up": [False] * 2, "near_limit_up": [False] * 2,
+             "is_limit_down": [False] * 2}, index=codes,
+        )
+        closes_map = {
+            "600000.XSHG": [10 + i * 0.2 for i in range(70)],   # 上行 → 保留
+            "000002.XSHE": [30 - i * 0.2 for i in range(70)],   # 下行 → 否决
+        }
+        with mock.patch.object(sel.jd, "get_universe", return_value=uni), \
+             mock.patch.object(sel.jd, "filter_universe", side_effect=lambda df, **k: df), \
+             mock.patch.object(sel.jd, "get_valuation_oneday", return_value=val), \
+             mock.patch.object(sel.jd, "get_money_flow_oneday", return_value=mf), \
+             mock.patch.object(sel.jd, "get_price_oneday", return_value=px), \
+             mock.patch.object(sel.jd, "get_money_flow_history", return_value={}), \
+             mock.patch.object(sel.jd, "get_index_closes", return_value=[]), \
+             mock.patch.object(sel.jd, "get_daily_closes_batch", return_value=closes_map), \
+             mock.patch.object(sel.jd, "get_security_name", side_effect=lambda c: "测试股"), \
+             mock.patch.object(sel, "JQ_TREND_VETO_BELOW_MA60", True), \
+             mock.patch.object(sel, "JQ_FINAL_PICKS", 5):
+            cands = sel.select_candidates(date="2026-06-10")
+        got = [c["代码"] for c in cands]
+        self.assertIn("600000", got)
+        self.assertNotIn("000002", got)   # 下行趋势被否决
+
+    def test_weak_market_tightens_threshold(self):
+        """大盘走弱：主力净占比下限上浮，净占比偏低的票被收紧剔除。"""
+        codes = ["600000.XSHG", "000002.XSHE"]
+        uni = pd.DataFrame(
+            {"display_name": ["甲", "乙"], "name": ["A", "B"],
+             "start_date": ["2010-01-01"] * 2, "end_date": ["2200-01-01"] * 2},
+            index=codes,
+        )
+        val = pd.DataFrame({"market_cap": [100.0, 120.0],
+                            "turnover_ratio": [10.0, 10.0]}, index=codes)
+        # 第二只净占比 6%（>5 下限但 <7 收紧后下限）→ 走弱时应被剔除
+        mf = pd.DataFrame({"net_pct_main": [12.0, 6.0],
+                           "net_amount_main": [5000.0, 2000.0]}, index=codes)
+        px = pd.DataFrame(
+            {"change_pct": [3.0, 3.0], "is_paused": [False] * 2,
+             "is_limit_up": [False] * 2, "near_limit_up": [False] * 2,
+             "is_limit_down": [False] * 2}, index=codes,
+        )
+        down = [3000 - i * 8 for i in range(26)]
+        with mock.patch.object(sel.jd, "get_universe", return_value=uni), \
+             mock.patch.object(sel.jd, "filter_universe", side_effect=lambda df, **k: df), \
+             mock.patch.object(sel.jd, "get_valuation_oneday", return_value=val), \
+             mock.patch.object(sel.jd, "get_money_flow_oneday", return_value=mf), \
+             mock.patch.object(sel.jd, "get_price_oneday", return_value=px), \
+             mock.patch.object(sel.jd, "get_money_flow_history", return_value={}), \
+             mock.patch.object(sel.jd, "get_index_closes", return_value=down), \
+             mock.patch.object(sel.jd, "get_daily_closes_batch", return_value={}), \
+             mock.patch.object(sel.jd, "get_security_name", side_effect=lambda c: "测试股"), \
+             mock.patch.object(sel, "JQ_MIN_NET_PCT_MAIN", 5.0), \
+             mock.patch.object(sel, "JQ_WEAK_MARKET_MIN_NET_BOOST", 2.0), \
+             mock.patch.object(sel, "JQ_WEAK_MARKET_SCORE", 0.45), \
+             mock.patch.object(sel, "JQ_FINAL_PICKS", 5):
+            cands = sel.select_candidates(date="2026-06-10")
+        got = [c["代码"] for c in cands]
+        self.assertIn("600000", got)
+        self.assertNotIn("000002", got)   # 净占比 6% 在走弱时被收紧剔除
 
 
 class TestMoneyFlowProFallback(unittest.TestCase):
@@ -547,8 +675,8 @@ class TestIntradayTrader(unittest.TestCase):
         trader.open_positions(candidates)
         self.assertIn("600000.XSHG", b.get_positions())
 
-        # 价格跳涨触发止盈，check_exits 应卖出
-        prices["600000.XSHG"] = 11.0
+        # 价格跳涨触发止盈，check_exits 应卖出（止盈阈值默认 +12%，故拉到 11.5=+15%）
+        prices["600000.XSHG"] = 11.5
         trader.check_exits()
         self.assertNotIn("600000.XSHG", b.get_positions())
 
