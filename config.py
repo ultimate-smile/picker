@@ -123,7 +123,7 @@ JQ_TOP_N = 20                # 参与综合评分的候选池大小（评分后�
 JQ_FINAL_PICKS = 3           # 最终选出的股票数量（select_candidates 默认返回的只数）
 JQ_EXCLUDE_ST = True         # 排除 ST/*ST
 JQ_EXCLUDE_KCB = False       # 排除科创板（68 开头）
-JQ_EXCLUDE_BJ = True         # 排除北交所（4/8 开头）
+JQ_EXCLUDE_BJ = False         # 排除北交所（4/8 开头）
 JQ_EXCLUDE_NEW_DAYS = 60     # 排除上市不足 N 个自然日的次新股
 
 # ── 盘中交易参数 ──
