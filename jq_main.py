@@ -15,6 +15,11 @@
     python3 jq_main.py --select --watchlist my_list.txt
         # watchlist 文件：每行/逗号/空格分隔的代码，# 开头为注释
 
+指定数据基准日（可与上面任一动作组合）：
+    python3 jq_main.py --select --date 2026-06-12
+        # 不传 --date 时：盘中/盘前自动用最近一个已收盘交易日的完整数据；
+        # 传 --date 时：强制以该日为基准日（如需当日盘中数据，显式传当天日期即可）。
+
 数据来源：聚宽 JQData（jqdatasdk）
 交易：默认本地模拟盘（PaperBroker）。实盘需自行接券商，或用聚宽策略平台
       （见 jq_strategy_joinquant.py）。
@@ -57,6 +62,17 @@ def _read_watchlist(path):
     except OSError as e:
         print(f"⚠️  读取 watchlist 失败：{e}")
     return codes
+
+
+def _parse_date(argv):
+    """解析 --date YYYY-MM-DD，返回 datetime.date 或 None（None 表示自动选用最近已收盘交易日）。"""
+    v = _extract_opt(argv, "--date")
+    if not v:
+        return None
+    try:
+        return datetime.strptime(v.strip(), "%Y-%m-%d").date()
+    except ValueError:
+        raise RuntimeError(f"--date 日期格式无效：{v!r}，应为 YYYY-MM-DD（例如 --date 2026-06-12）")
 
 
 def _parse_codes(argv):
@@ -167,19 +183,20 @@ def cmd_selftest() -> bool:
     return critical_ok
 
 
-def _quick_select(codes=None) -> list:
+def _quick_select(codes=None, date=None) -> list:
     """仅选股并打印候选表（不做五维评估），供 --paper 等轻量流程复用。"""
-    candidates = sel.select_candidates(codes=codes)
+    candidates = sel.select_candidates(codes=codes, date=date)
     sel.print_candidates(candidates)
     return candidates
 
 
-def cmd_select(codes=None) -> list:
+def cmd_select(codes=None, date=None) -> list:
     """选股 → 打印候选表 → 对这些候选补充买卖价位 + 持有建议（五维评估）。"""
-    candidates = _quick_select(codes=codes)
+    candidates = _quick_select(codes=codes, date=date)
     if candidates:
         import jq_deep
-        picks = jq_deep.evaluate_candidates(candidates, final_picks=len(candidates))
+        picks = jq_deep.evaluate_candidates(candidates, ref_date=date,
+                                            final_picks=len(candidates))
         if picks:
             print("\n" + "=" * 50)
             print(jq_deep.format_report(picks, final_picks=len(picks)))
@@ -187,10 +204,10 @@ def cmd_select(codes=None) -> list:
     return candidates
 
 
-def cmd_deep(codes=None) -> None:
+def cmd_deep(codes=None, date=None) -> None:
     """多维度综合评估：技术/基本面/筹码/大盘板块/消息催化 加权打分 + 操作持有建议。"""
     import jq_deep
-    picks = jq_deep.select_deep(codes=codes)
+    picks = jq_deep.select_deep(codes=codes, date=date)
     if not picks:
         print("无符合条件的标的，建议观望。")
         return
@@ -199,9 +216,9 @@ def cmd_deep(codes=None) -> None:
     print("=" * 50)
 
 
-def cmd_analyze(codes=None) -> None:
+def cmd_analyze(codes=None, date=None) -> None:
     # 给 Claude/本地分析器更宽的候选池（JQ_TOP_N），再由其精选到 JQ_FINAL_PICKS
-    pool = sel.select_candidates(codes=codes, top_n=sel.JQ_TOP_N)
+    pool = sel.select_candidates(codes=codes, date=date, top_n=sel.JQ_TOP_N)
     sel.print_candidates(pool)
     if not pool:
         print("无候选股，跳过分析")
@@ -214,8 +231,8 @@ def cmd_analyze(codes=None) -> None:
     print("=" * 50)
 
 
-def cmd_paper(demo: bool = False, codes=None) -> None:
-    candidates = _quick_select(codes=codes)
+def cmd_paper(demo: bool = False, codes=None, date=None) -> None:
+    candidates = _quick_select(codes=codes, date=date)
     if not candidates:
         print("无候选股，结束")
         return
@@ -233,12 +250,19 @@ def main(argv=None):
     argv = argv if argv is not None else sys.argv[1:]
     args = set(argv)
     codes = _parse_codes(argv)
+    try:
+        date = _parse_date(argv)
+    except RuntimeError as e:
+        print(f"\n❌ {e}")
+        return 1
 
     print("=" * 50)
     print("  🚀 聚宽版 选股 + 盘中交易系统")
     print(f"  ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     if codes:
         print(f"  🎯 自定义股票池：{len(codes)} 只")
+    if date:
+        print(f"  📅 数据基准日（显式指定）：{date}")
     print("=" * 50)
 
     # 仅含自定义池参数（无显式动作）时，默认执行选股
@@ -251,17 +275,17 @@ def main(argv=None):
             ok = cmd_selftest()
             return 0 if ok else 1
         if "--analyze" in args:
-            cmd_analyze(codes=codes)
+            cmd_analyze(codes=codes, date=date)
             return 0
         if "--paper" in args:
-            cmd_paper(demo="--demo" in args, codes=codes)
+            cmd_paper(demo="--demo" in args, codes=codes, date=date)
             return 0
         if "--select" in args:
-            cmd_select(codes=codes)
+            cmd_select(codes=codes, date=date)
             return 0
         # 默认（不带动作参数）或 --deep：多维度综合评估 + 买卖价位 + 持有建议
         if "--deep" in args or not has_action:
-            cmd_deep(codes=codes)
+            cmd_deep(codes=codes, date=date)
             return 0
     except RuntimeError as e:
         print(f"\n❌ {e}")
