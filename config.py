@@ -92,6 +92,9 @@ JQ_MIN_MARKET_CAP = 50.0     # 最小总市值（亿元）
 # 同时仍由最小市值过滤掉流动性差的微盘股。
 JQ_MAX_MARKET_CAP = 2000.0   # 最大总市值（亿元）；None=不限
 JQ_MIN_TURNOVER = 2.0        # 最小换手率（%），过滤流动性差的票；None=不限
+# 成交额/资金绝对额过滤：避免小成交额股票因比例高而入选，提升容量与可成交性。
+JQ_MIN_TURNOVER_AMOUNT = 2e8    # 当日成交额下限（元）；None=不限
+JQ_MIN_NET_AMOUNT_MAIN = 3000.0 # 主力净流入绝对额下限（万元）；None=不限
 # 调高到 40：兼容“启动初期放量”的高换手（30% 会误杀刚启动的强势股），
 # 换手健康度评分同步把衰减区间拉到 40（见 jq_selector._turnover_score）。
 JQ_MAX_TURNOVER = 40.0       # 最大换手率（%），过滤过热炒作；None=不限
@@ -212,7 +215,8 @@ JQ_TECH_WEIGHTS = {
     "ma":       0.35,   # 均线系统（站上 5/10/20/60 + 多头排列）
     "volprice": 0.20,   # 量价配合（涨放量、跌缩量，背离降分）
     "macd":     0.25,   # MACD（金叉/零轴上方更强，死叉降分）
-    "level":    0.20,   # 关键价位（距支撑/压力的位置，决定进场性价比）
+    "level":    0.16,   # 关键价位（距支撑/压力的位置，决定进场性价比）
+    "risk":     0.04,   # 波动/趋势过热风险（ATR、短期涨幅、缺口/长上影）
 }
 # 均线参数与关键价位回看窗口
 JQ_MA_PERIODS = [5, 10, 20, 60]
@@ -268,3 +272,7 @@ JQ_DEEP_MIN_SCORE = 0.0          # 综合分低于该值不推荐（0=不限）
 JQ_BUY_PULLBACK_PCT = 0.02       # 买入区间下沿相对现价/支撑的回踩幅度
 JQ_STOP_BUFFER_PCT = 0.02        # 止损相对关键支撑位下移的缓冲
 JQ_STOP_MAX_PCT = 0.08           # 止损与现价的最大距离上限（控制单笔风险）
+JQ_ATR_PERIOD = 14                 # ATR 波动率窗口，用于动态止损与风险过滤
+JQ_ATR_STOP_MULT = 2.0             # ATR 止损倍数（close - N*ATR）
+JQ_MIN_REWARD_RISK = 1.5           # 最低目标1盈亏比；低于则降仓/提示不推荐追买
+JQ_RR_POSITION_FLOOR = 0.5         # 盈亏比不达标时，建议仓位最多保留原仓位的比例

@@ -20,7 +20,8 @@ class TestTradePlan(unittest.TestCase):
     def test_plan_ordering_and_risk_cap(self):
         dims = {"technical": 0.8, "fundamental": 0.8, "chips": 0.6,
                 "market": 0.7, "catalyst": 0.6}
-        detail = {"technical": {"ma": {"below_ma20": False, "below_ma60": False}}}
+        detail = {"technical": {"ma": {"below_ma20": False, "below_ma60": False},
+                                "risk": {"atr": 0.4}}}
         plan = dp.trade_plan(10.0, self._levels(), dims, detail)
         self.assertLess(plan["buy_low"], plan["buy_high"] + 1e-9)
         self.assertLess(plan["stop"], 10.0)
@@ -31,6 +32,17 @@ class TestTradePlan(unittest.TestCase):
         # 含未来走势预测
         self.assertTrue(plan.get("forecast"))
         self.assertIsInstance(plan["forecast"], str)
+        self.assertIn("reward_risk", plan)
+        self.assertEqual(plan["atr"], 0.4)
+
+    def test_low_reward_risk_adds_warning_and_reduces_position(self):
+        dims = {"technical": 0.8, "fundamental": 0.8, "chips": 0.6,
+                "market": 0.7, "catalyst": 0.6}
+        detail = {"technical": {"ma": {"below_ma20": False, "below_ma60": False}}}
+        plan = dp.trade_plan(10.0, {"support": 9.5, "resistance": 10.3}, dims, detail)
+        self.assertFalse(plan["reward_risk_ok"])
+        self.assertIn("盈亏比", plan["risk_note"])
+        self.assertLess(plan["position_pct"], dp._position_pct(dims))
 
     def test_no_price(self):
         plan = dp.trade_plan(0, self._levels(), {}, {})

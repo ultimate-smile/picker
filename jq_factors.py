@@ -42,11 +42,12 @@ DIM_WEIGHTS = _cfg_get("JQ_DIM_WEIGHTS", {
     "chips": 0.10, "catalyst": 0.10,
 })
 TECH_WEIGHTS = _cfg_get("JQ_TECH_WEIGHTS", {
-    "ma": 0.35, "volprice": 0.20, "macd": 0.25, "level": 0.20})
+    "ma": 0.35, "volprice": 0.20, "macd": 0.25, "level": 0.16, "risk": 0.04})
 MA_PERIODS = _cfg_get("JQ_MA_PERIODS", [5, 10, 20, 60])
 LEVEL_LOOKBACK = _cfg_get("JQ_LEVEL_LOOKBACK", 60)
 VOLPRICE_LOOKBACK = _cfg_get("JQ_VOLPRICE_LOOKBACK", 5)
 MACD_CROSS_LOOKBACK = _cfg_get("JQ_MACD_CROSS_LOOKBACK", 5)
+ATR_PERIOD = _cfg_get("JQ_ATR_PERIOD", 14)
 
 FUND_WEIGHTS = _cfg_get("JQ_FUND_WEIGHTS", {
     "rev_accel": 0.4, "margin": 0.3, "quality": 0.3})
@@ -95,6 +96,46 @@ def sma(values, n: int) -> float:
 def ema_series(values, span: int) -> pd.Series:
     s = pd.Series(values, dtype="float64")
     return s.ewm(span=span, adjust=False).mean()
+
+
+def atr_series(highs, lows, closes, period=None) -> pd.Series:
+    """Average True Range 序列；用于衡量个股真实波动率。"""
+    period = period or ATR_PERIOD
+    h = pd.Series(highs, dtype="float64")
+    low = pd.Series(lows, dtype="float64")
+    c = pd.Series(closes, dtype="float64")
+    if len(c) == 0:
+        return pd.Series(dtype="float64")
+    prev_close = c.shift(1)
+    tr = pd.concat([(h - low).abs(), (h - prev_close).abs(),
+                    (low - prev_close).abs()], axis=1).max(axis=1)
+    return tr.rolling(period, min_periods=max(2, min(period, len(tr)))).mean()
+
+
+def volatility_risk_score(highs, lows, closes, period=None):
+    """波动/过热风险分：ATR 适中、短期不过热、无明显长上影/跳空更高。"""
+    c = pd.Series(closes, dtype="float64").dropna()
+    h = pd.Series(highs, dtype="float64").dropna()
+    low = pd.Series(lows, dtype="float64").dropna()
+    detail = {"atr": None, "atr_pct": None, "ret20": None, "upper_shadow": None}
+    if len(c) < 3 or len(h) < 3 or len(low) < 3:
+        return 0.5, detail
+    close = float(c.iloc[-1])
+    atr = atr_series(h, low, c, period).dropna()
+    atr_val = float(atr.iloc[-1]) if len(atr) else float("nan")
+    atr_pct = atr_val / close if close > 0 and not math.isnan(atr_val) else float("nan")
+    ret_n = min(20, len(c) - 1)
+    ret20 = close / float(c.iloc[-ret_n - 1]) - 1.0 if ret_n > 0 else 0.0
+    rng = max(float(h.iloc[-1] - low.iloc[-1]), 1e-9)
+    upper_shadow = max(0.0, float(h.iloc[-1] - close)) / rng
+    detail.update(atr=round(atr_val, 4) if not math.isnan(atr_val) else None,
+                  atr_pct=round(atr_pct, 4) if not math.isnan(atr_pct) else None,
+                  ret20=round(ret20, 4), upper_shadow=round(upper_shadow, 4))
+    atr_s = 0.5 if math.isnan(atr_pct) else (1.0 if 0.015 <= atr_pct <= 0.055
+                                             else max(0.0, 1.0 - abs(atr_pct - 0.035) / 0.06))
+    heat_s = 1.0 if ret20 <= 0.18 else max(0.0, 1.0 - (ret20 - 0.18) / 0.25)
+    shadow_s = max(0.0, 1.0 - upper_shadow / 0.55)
+    return _clip01(0.45 * atr_s + 0.35 * heat_s + 0.20 * shadow_s), detail
 
 
 def macd(closes, fast=12, slow=26, signal=9):
@@ -337,14 +378,17 @@ def technical_score(bars, weights=None):
     s_macd, d_macd = macd_score(closes)
     levels = key_levels(highs, lows, closes, vols)
     s_lvl, d_lvl = level_score(close, levels)
+    s_risk, d_risk = volatility_risk_score(highs, lows, closes)
 
     total = (weights.get("ma", 0) * s_ma + weights.get("volprice", 0) * s_vp
-             + weights.get("macd", 0) * s_macd + weights.get("level", 0) * s_lvl)
-    wsum = sum(weights.get(k, 0) for k in ("ma", "volprice", "macd", "level")) or 1.0
+             + weights.get("macd", 0) * s_macd + weights.get("level", 0) * s_lvl
+             + weights.get("risk", 0) * s_risk)
+    wsum = sum(weights.get(k, 0) for k in ("ma", "volprice", "macd", "level", "risk")) or 1.0
     detail = {"ma": d_ma, "volprice": d_vp, "macd": d_macd, "level": d_lvl,
-              "levels": levels, "close": round(close, 3),
+              "risk": d_risk, "levels": levels, "close": round(close, 3),
               "subscores": {"ma": round(s_ma, 3), "volprice": round(s_vp, 3),
-                            "macd": round(s_macd, 3), "level": round(s_lvl, 3)}}
+                            "macd": round(s_macd, 3), "level": round(s_lvl, 3),
+                            "risk": round(s_risk, 3)}}
     return _clip01(total / wsum), detail
 
 

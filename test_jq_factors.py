@@ -122,6 +122,15 @@ class TestTechnical(unittest.TestCase):
         s, d = jf.technical_score(pd.DataFrame())
         self.assertEqual(s, 0.5)
 
+    def test_volatility_risk_exposes_atr(self):
+        closes = [10 + i * 0.05 for i in range(30)]
+        highs = [c + 0.2 for c in closes]
+        lows = [c - 0.2 for c in closes]
+        s, d = jf.volatility_risk_score(highs, lows, closes)
+        self.assertTrue(0.0 <= s <= 1.0)
+        self.assertIsNotNone(d["atr"])
+        self.assertIn("risk", jf.technical_score(_bars(closes, highs, lows))[1]["subscores"])
+
 
 class TestFundamental(unittest.TestCase):
     def test_revenue_acceleration(self):

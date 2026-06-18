@@ -44,6 +44,8 @@ JQ_MIN_MARKET_CAP = _cfg_get("JQ_MIN_MARKET_CAP", 50.0)
 JQ_MAX_MARKET_CAP = _cfg_get("JQ_MAX_MARKET_CAP", 1000.0)
 JQ_MIN_TURNOVER = _cfg_get("JQ_MIN_TURNOVER", 2.0)
 JQ_MAX_TURNOVER = _cfg_get("JQ_MAX_TURNOVER", 30.0)
+JQ_MIN_TURNOVER_AMOUNT = _cfg_get("JQ_MIN_TURNOVER_AMOUNT", None)
+JQ_MIN_NET_AMOUNT_MAIN = _cfg_get("JQ_MIN_NET_AMOUNT_MAIN", None)
 JQ_HIST_LOOKBACK_DAYS = _cfg_get("JQ_HIST_LOOKBACK_DAYS", 5)
 JQ_TOP_N = _cfg_get("JQ_TOP_N", 20)
 JQ_FINAL_PICKS = _cfg_get("JQ_FINAL_PICKS", 3)
@@ -99,6 +101,10 @@ def _passes_valuation(row) -> bool:
             return False
         if JQ_MAX_TURNOVER is not None and tr > JQ_MAX_TURNOVER:
             return False
+    amt = row.get("money")
+    if (JQ_MIN_TURNOVER_AMOUNT is not None and amt is not None
+            and not pd.isna(amt) and float(amt) < JQ_MIN_TURNOVER_AMOUNT):
+        return False
     return True
 
 
@@ -508,10 +514,18 @@ def select_candidates(date=None, top_n=None, codes=None) -> list:
     mf["net_pct_main"] = pd.to_numeric(mf["net_pct_main"], errors="coerce")
     mf["net_amount_main"] = pd.to_numeric(mf["net_amount_main"], errors="coerce")
     mf = mf[mf["net_pct_main"] >= min_net_main]
+    if JQ_MIN_NET_AMOUNT_MAIN is not None:
+        before_amt = mf
+        mf = mf[mf["net_amount_main"] >= JQ_MIN_NET_AMOUNT_MAIN]
+        if mf.empty and not before_amt.empty:
+            print("  ⚠️  主力净流入绝对额过滤后为空，回退为仅按净占比筛选（请复核成交容量）。")
+            mf = before_amt
     if JQ_MAX_NET_PCT_MAIN is not None:
         mf = mf[mf["net_pct_main"] <= JQ_MAX_NET_PCT_MAIN]
     hi = JQ_MAX_NET_PCT_MAIN if JQ_MAX_NET_PCT_MAIN is not None else "∞"
-    print(f"  主力净占比 ∈ [{min_net_main}, {hi}]%：{len(mf)} 只")
+    amt_note = (f"，主力净流入≥{JQ_MIN_NET_AMOUNT_MAIN}万元"
+                if JQ_MIN_NET_AMOUNT_MAIN is not None else "")
+    print(f"  主力净占比 ∈ [{min_net_main}, {hi}]%{amt_note}：{len(mf)} 只")
     if mf.empty:
         return []
 
@@ -528,6 +542,10 @@ def select_candidates(date=None, top_n=None, codes=None) -> list:
                 if not is_tradable(row):
                     continue
                 if not _in_change_band(row.get("change_pct")):
+                    continue
+                money = row.get("money")
+                if (JQ_MIN_TURNOVER_AMOUNT is not None and money is not None
+                        and not pd.isna(money) and float(money) < JQ_MIN_TURNOVER_AMOUNT):
                     continue
             keep.append(c)
         mf = mf.loc[keep]

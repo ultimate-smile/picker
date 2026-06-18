@@ -38,6 +38,9 @@ DEEP_MIN_SCORE = _cfg_get("JQ_DEEP_MIN_SCORE", 0.0)
 BUY_PULLBACK_PCT = _cfg_get("JQ_BUY_PULLBACK_PCT", 0.02)
 STOP_BUFFER_PCT = _cfg_get("JQ_STOP_BUFFER_PCT", 0.02)
 STOP_MAX_PCT = _cfg_get("JQ_STOP_MAX_PCT", 0.08)
+ATR_STOP_MULT = _cfg_get("JQ_ATR_STOP_MULT", 2.0)
+MIN_REWARD_RISK = _cfg_get("JQ_MIN_REWARD_RISK", 1.5)
+RR_POSITION_FLOOR = _cfg_get("JQ_RR_POSITION_FLOOR", 0.5)
 PER_POSITION_PCT = _cfg_get("PER_POSITION_PCT", 0.3)
 MAX_POSITIONS = _cfg_get("MAX_POSITIONS", 3)
 UNLOCK_WARN_DAYS = _cfg_get("JQ_UNLOCK_WARN_DAYS", 30)
@@ -132,7 +135,11 @@ def trade_plan(close, levels, dims, detail):
     # 止损：关键支撑下方一个缓冲；但不超过最大风险（取更高/更紧者）
     stop_by_level = sup * (1 - STOP_BUFFER_PCT)
     stop_by_cap = close * (1 - STOP_MAX_PCT)
-    stop = max(stop_by_level, stop_by_cap)
+    atr = ((detail.get("technical", {}) or {}).get("risk", {}) or {}).get("atr")
+    stop_candidates = [stop_by_level, stop_by_cap]
+    if atr:
+        stop_candidates.append(close - float(atr) * ATR_STOP_MULT)
+    stop = max(stop_candidates)
 
     # 目标价：T1=压力位，T2=前高(若更高)或测幅
     t1 = res
@@ -141,13 +148,20 @@ def trade_plan(close, levels, dims, detail):
     if t2 <= t1:
         t2 = t1 * 1.05
 
+    risk_pct = max((close - stop) / close * 100, 0.1)
+    reward_pct = (t1 - close) / close * 100
+    reward_risk = reward_pct / risk_pct if risk_pct > 0 else 0.0
+    rr_ok = reward_risk >= MIN_REWARD_RISK
     plan.update(buy_low=round(buy_low, 2), buy_high=round(buy_high, 2),
                 stop=round(stop, 2), target1=round(t1, 2), target2=round(t2, 2),
                 support=round(sup, 2), resistance=round(res, 2),
-                risk_pct=round((close - stop) / close * 100, 1),
-                reward_pct=round((t1 - close) / close * 100, 1))
+                risk_pct=round(risk_pct, 1), reward_pct=round(reward_pct, 1),
+                reward_risk=round(reward_risk, 2), reward_risk_ok=rr_ok,
+                atr=round(float(atr), 3) if atr else None)
     plan["hold"] = _holding_advice(dims, detail)
-    plan["position_pct"] = _position_pct(dims)
+    plan["position_pct"] = _position_pct(dims, reward_risk=reward_risk)
+    if not rr_ok:
+        plan["risk_note"] = f"目标1盈亏比 {reward_risk:.2f} 低于阈值 {MIN_REWARD_RISK}，不建议追买；仅可小仓观察或等待回踩。"
     plan["forecast"] = _trend_forecast(close, sup, res, dims, detail)
     return plan
 
@@ -234,14 +248,16 @@ def _holding_advice(dims, detail):
     return base
 
 
-def _position_pct(dims):
-    """综合分越高、风险维度越好，建议仓位越高（上限 PER_POSITION_PCT）。"""
+def _position_pct(dims, reward_risk=None):
+    """综合分越高、风险维度越好，建议仓位越高；盈亏比不足自动降仓。"""
     total = jf.aggregate(dims)
     cat = dims.get("catalyst", 0.5)
     factor = total
     if cat < 0.3:                 # 有重大解禁等利空，压缩仓位
         factor *= 0.5
     pct = PER_POSITION_PCT * max(0.3, min(1.0, factor / 0.7))
+    if reward_risk is not None and reward_risk < MIN_REWARD_RISK:
+        pct *= RR_POSITION_FLOOR
     return round(min(pct, PER_POSITION_PCT), 3)
 
 
@@ -370,9 +386,12 @@ def format_report(picks, final_picks=None):
         if plan.get("buy_low"):
             out.append(f"  现价≈{s.get('现价')}　建议买入区间 "
                        f"{plan['buy_low']}~{plan['buy_high']}（关键支撑 {plan['support']}）")
-            out.append(f"  止损位 {plan['stop']}（-{plan['risk_pct']}%）｜"
+            atr_txt = f"｜ATR {plan['atr']}" if plan.get("atr") else ""
+            out.append(f"  止损位 {plan['stop']}（-{plan['risk_pct']}%{atr_txt}）｜"
                        f"目标价1 {plan['target1']}（+{plan['reward_pct']}%，压力位）｜"
-                       f"目标价2 {plan['target2']}")
+                       f"盈亏比 {plan.get('reward_risk', 0)}｜目标价2 {plan['target2']}")
+            if plan.get("risk_note"):
+                out.append(f"  ⚠️  {plan['risk_note']}")
             out.append(f"  建议仓位：≤{plan['position_pct'] * 100:.0f}%"
                        f"（最多 {MAX_POSITIONS} 只）")
             out.append(f"  持有建议：{plan['hold']}")
