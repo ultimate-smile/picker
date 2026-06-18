@@ -9,6 +9,7 @@
     python3 jq_main.py --analyze      # 选股 + Claude 深度分析（需配置 ANTHROPIC_API_KEY）
     python3 jq_main.py --paper        # 选股 + 本地模拟盘日内交易（安全，推荐）
     python3 jq_main.py --paper --demo # 同上，但用历史价做一次性演示（非交易时段也可跑）
+    python3 jq_main.py --review --review-file history.txt --review-to 2026-06-18
 
 自定义股票池（可与上面任一动作组合）：
     python3 jq_main.py --select --codes 600000,000001,300750
@@ -243,7 +244,7 @@ def main(argv=None):
 
     # 仅含自定义池参数（无显式动作）时，默认执行选股
     action_flags = {"--selftest", "--diagnose", "--analyze", "--paper",
-                    "--select", "--deep"}
+                    "--select", "--deep", "--review"}
     has_action = bool(args & action_flags)
 
     try:
@@ -255,6 +256,14 @@ def main(argv=None):
             return 0
         if "--paper" in args:
             cmd_paper(demo="--demo" in args, codes=codes)
+            return 0
+        if "--review" in args:
+            import jq_review
+            path = _extract_opt(argv, "--review-file")
+            text = open(path, "r", encoding="utf-8").read() if path else sys.stdin.read()
+            to_s = _extract_opt(argv, "--review-to")
+            end = datetime.strptime(to_s, "%Y-%m-%d").date() if to_s else datetime.now().date()
+            print(jq_review.review_text(text, end_date=end))
             return 0
         if "--select" in args:
             cmd_select(codes=codes)

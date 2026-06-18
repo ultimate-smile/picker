@@ -166,3 +166,18 @@ class TestScoreOne(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+def test_parse_review_recommendations():
+    from jq_review import parse_recommendations
+    text = """
+    6月11号
+    第一推荐：300655 晶瑞电材（创业板）｜综合评分 0.659
+      现价≈16.04　建议买入区间 16.07~16.2（关键支撑 15.99）
+      止损位 15.68（-2.3%）｜目标价1 17.41（+8.5%，压力位）｜目标价2 18.83
+    """
+    recs = parse_recommendations(text, year=2026)
+    assert len(recs) == 1
+    assert recs[0].code == "300655"
+    assert recs[0].buy_low == 16.07
+    assert recs[0].target1 == 17.41
