@@ -64,7 +64,7 @@ python3 jq_main.py --select --codes 600000,000001,300750   # 候选表 + 买卖�
 python3 jq_main.py --select --watchlist my_list.txt   # 文件内换行/逗号/空格分隔，# 为注释
 
 # 连续七跌反弹策略回测：指定股票、日期区间和初始本金（默认 10w）
-python3 jq_seven_day_strategy.py --code 600000 --start 2024-01-01 --end 2024-12-31 --cash 100000
+python3 jq_seven_day_strategy.py --code 688188 --start 2020-12-29 --end 2026-08-07 --cash 100000
 ```
 
 
@@ -75,16 +75,16 @@ python3 jq_seven_day_strategy.py --code 600000 --start 2024-01-01 --end 2024-12-
 1. 空仓时寻找连续 7 个交易日收盘价低于前一交易日收盘价的区间；
 2. 第 8 个交易日开盘价 `>=` 第 7 个下跌日收盘价时，按开盘价全仓买入（A 股按 100 股一手），否则不买；
 3. 持仓后若某日开盘价低于前一交易日收盘价，按该日开盘价卖出；
-4. 若持仓期间连续 7 个交易日收盘价高于前一交易日收盘价，按第 7 个上涨日收盘价卖出；
+4. 若持仓后连续 7 个后续交易日的开盘价均 `>=` 前一交易日收盘价，按第 7 个满足日开盘价卖出；
 5. 卖出后继续向后寻找下一段连续 7 跌，直至回测结束。
 
 示例：
 
 ```bash
-python3 jq_seven_day_strategy.py --code 600000 --start 2024-01-01 --end 2024-12-31 --cash 100000
+python3 jq_seven_day_strategy.py --code 688188 --start 2020-12-29 --end 2026-08-07 --cash 100000
 ```
 
-输出包含初始本金、最终权益、收益率、期末持仓以及每笔买卖明细。脚本通过 `jq_data` 调用 jqdatasdk 的日线行情接口获取交易日数据；使用前需先配置聚宽账号。
+输出包含初始本金、最终权益、收益率、期末持仓以及每笔买卖明细。脚本通过 `https://api.shizixi.com/api/v3/data/kline/batch` 获取日线交易日数据，默认参数为 `period=daily`、`adjust=qfq`、`limit=10000`。
 
 ### 选股逻辑（`jq_selector.py`）—— 多因子 + 可操作性优先
 
